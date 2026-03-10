@@ -1,5 +1,4 @@
 import torch
-import torch.nn as nn
 import torch.optim as optim
 import numpy as np
 import matplotlib.pyplot as plt
@@ -9,134 +8,25 @@ import time
 from tqdm import tqdm
 from matplotlib.font_manager import FontProperties #! <--- ADDED: 导入字体管理器
 
+from market_environment import MarketEnvironment
+from portfolio_model import PortfolioModel
+from performance_metrics import PerformanceMetrics
+
 # --- 0. 初始化设置 ---
 
 #! <--- MODIFIED: 动态加载字体文件 ---!
 # 检查字体文件是否存在于脚本的同一目录
-FONT_FILENAME = 'SourceHanSansSC-Regular.otf'
-if os.path.exists(FONT_FILENAME):
-    # 如果找到字体文件，则加载它
-    chinese_font = FontProperties(fname=FONT_FILENAME)
-    print(f"成功加载中文字体: {FONT_FILENAME}")
+base_dir = os.path.dirname(os.path.abspath(__file__))
+font_path = os.path.join(base_dir, 'SourceHanSansSC-Regular.otf')
+
+if os.path.exists(font_path):
+    chinese_font = FontProperties(fname=font_path)
+    print(f"成功加载中文字体: {font_path}")
 else:
-    # 如果找不到，则将字体属性设为None，并打印警告
     chinese_font = None
-    print(f"警告: 未在脚本目录中找到字体文件 '{FONT_FILENAME}'。")
+    print(f"警告: 未在脚本目录中找到字体 '{font_path}'。")
     print("图表中的中文可能无法正常显示。请下载该字体并放置于脚本同级目录。")
 
-
-# --- 1. 市场环境模拟 (已扩展) ---
-class MarketEnvironment:
-    """
-    模拟包含多种波动率情景的股票市场环境
-    """
-    def __init__(self, trading_days=252):
-        self.num_stocks_per_regime = 2001
-        self.num_stocks = self.num_stocks_per_regime * 3
-        self.d_model = 64
-        self.trading_days = trading_days
-
-        # 生成固定的股票嵌入向量
-        self.stock_embeddings = torch.randn(self.num_stocks, self.d_model)
-
-        # 设定股票的年化收益和波动率
-        self.annual_returns = self._generate_returns()
-        self.annual_volatility = self._generate_volatilities()
-
-        # 转换为日度数据
-        self.daily_returns_mean = self.annual_returns / self.trading_days
-        self.daily_volatility = self.annual_volatility / np.sqrt(self.trading_days)
-
-    def _generate_returns(self):
-        """
-        为所有三个情景生成年化收益率
-        """
-        returns = np.zeros(self.num_stocks)
-        for i in range(3):
-            start_idx = i * self.num_stocks_per_regime
-            end_idx = (i + 1) * self.num_stocks_per_regime
-            returns[start_idx:end_idx] = self._generate_single_regime_returns()
-        return returns
-
-    def _generate_single_regime_returns(self):
-        """
-        根据规则为单个情景（2001只股票）生成年化收益率
-        中心点: 15%, 边缘: -5%
-        """
-        returns = np.zeros(self.num_stocks_per_regime)
-        center_stock = self.num_stocks_per_regime // 2
-        max_return = 0.15
-        min_return = -0.05
-
-        for i in range(self.num_stocks_per_regime):
-            distance_from_center = abs(i - center_stock)
-            returns[i] = max_return - distance_from_center * (max_return - min_return) / center_stock
-        return returns
-    
-    def _generate_volatilities(self):
-        """
-        为三个情景生成固定的年化波动率
-        情景1: 5%, 情景2: 10%, 情景3: 15%
-        """
-        volatilities = np.zeros(self.num_stocks)
-        vol_levels = [0.05, 0.10, 0.15] # 5%, 10%, 15%
-        for i in range(3):
-            start_idx = i * self.num_stocks_per_regime
-            end_idx = (i + 1) * self.num_stocks_per_regime
-            volatilities[start_idx:end_idx] = vol_levels[i]
-        return volatilities
-
-    def get_daily_returns(self, num_days):
-        """
-        生成指定天数的随机日度收益
-        """
-        daily_returns = np.random.normal(
-            loc=self.daily_returns_mean[:, np.newaxis],
-            scale=self.daily_volatility[:, np.newaxis],
-            size=(self.num_stocks, num_days)
-        )
-        return torch.tensor(daily_returns, dtype=torch.float32)
-
-# --- 2. 投资组合模型 (无变化) ---
-class PortfolioModel(nn.Module):
-    def __init__(self, d_model):
-        super(PortfolioModel, self).__init__()
-        self.layer1 = nn.Linear(d_model, 32)
-        self.relu = nn.ReLU()
-        self.layer2 = nn.Linear(32, 1)
-        self.softmax = nn.Softmax(dim=0)
-
-    def forward(self, embeddings):
-        x = self.relu(self.layer1(embeddings))
-        logits = self.layer2(x)
-        weights = self.softmax(logits)
-        return weights.squeeze()
-
-# --- 3. 损失函数与评估指标 (无变化) ---
-class PerformanceMetrics:
-    def __init__(self, trading_days=252, risk_free_rate=0.0):
-        self.trading_days = trading_days
-        self.risk_free_rate = risk_free_rate / trading_days
-
-    def calculate_metrics(self, portfolio_returns, daily_stock_returns):
-        if isinstance(portfolio_returns, torch.Tensor):
-            portfolio_returns = portfolio_returns.detach().cpu().numpy()
-        if isinstance(daily_stock_returns, torch.Tensor):
-            daily_stock_returns = daily_stock_returns.detach().cpu().numpy()
-        if portfolio_returns.ndim > 1:
-            portfolio_returns = portfolio_returns.flatten()
-        if np.std(portfolio_returns) < 1e-9: return {'Annualized Return': 0, 'Sharpe Ratio': 0, 'Sortino Ratio': 0, 'Max Drawdown': 0, 'CVaR (5%)': 0, 'Beta': 0, 'IR': 0}
-        annualized_return = np.mean(portfolio_returns) * self.trading_days
-        sharpe_ratio = (np.mean(portfolio_returns) - self.risk_free_rate) / np.std(portfolio_returns) * np.sqrt(self.trading_days)
-        negative_returns = portfolio_returns[portfolio_returns < self.risk_free_rate]
-        downside_std = np.std(negative_returns) if len(negative_returns) > 0 else 0
-        sortino_ratio = (np.mean(portfolio_returns) - self.risk_free_rate) / downside_std * np.sqrt(self.trading_days) if downside_std > 0 else 0
-        cumulative_returns = np.cumprod(1 + portfolio_returns); peak = np.maximum.accumulate(cumulative_returns)
-        drawdown = (cumulative_returns - peak) / peak; max_drawdown = np.min(drawdown) if len(drawdown) > 0 else 0
-        var_5 = np.percentile(portfolio_returns, 5); cvar_5 = np.mean(portfolio_returns[portfolio_returns <= var_5])
-        market_returns = np.mean(daily_stock_returns, axis=0); covariance = np.cov(portfolio_returns, market_returns)[0, 1]
-        market_variance = np.var(market_returns); beta = covariance / market_variance if market_variance > 0 else 0
-        return {'Annualized Return': annualized_return, 'Sharpe Ratio': sharpe_ratio, 'Sortino Ratio': sortino_ratio, 'Max Drawdown': max_drawdown, 'CVaR (5%)': -cvar_5, 'Beta': beta, 'IR': sharpe_ratio}
 
 # --- 损失函数定义 (无变化) ---
 def loss_return(p): return -torch.mean(p)
@@ -209,7 +99,7 @@ def train_and_evaluate(loss_function, loss_name, env, learning_rate, device,
         avg_loss_in_batch = total_loss_in_batch / batch_size
         epoch_elapsed_time = time.time() - epoch_start_time
         progress_bar.set_postfix(loss=f"{avg_loss_in_batch:.6f}", epoch_time=f"{epoch_elapsed_time:.2f}s")
-        if (epoch + 1) % 50 == 0: # 每50个epoch打印一次日志
+        if (epoch + 1) % 30 == 0: # 每30个epoch打印一次日志
             print(f"[{loss_name}] Epoch {epoch+1}/{max_epochs} finished in {epoch_elapsed_time:.2f}s, loss={avg_loss_in_batch:.6f}")
         completed_epochs = epoch + 1
             
@@ -325,31 +215,46 @@ def run_experiment(trading_days_per_epoch, learning_rate, max_epochs, patience, 
     print(f"\n--- 实验 {exp_name} 完成！所有结果已保存至目录: {output_dir} ---\n")
 
 
-# --- 6. Main函数 ---
-def main():
-    # --- 创建唯一的输出目录 ---
+def main(config):
+    # --- 以目前腳本所在目錄為基準 ---
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+
+    # --- 建立 result 資料夾 ---
+    result_dir = os.path.join(base_dir, "result")
+    os.makedirs(result_dir, exist_ok=True)
+
+    # --- 在 result 底下建立本次實驗輸出目錄 ---
     timestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-    output_dir = f"results_{timestamp}"
+    output_dir = os.path.join(result_dir, f"results_{timestamp}")
     os.makedirs(output_dir, exist_ok=True)
-    
+
     # --- 设置设备 ---
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"{'='*20} 使用设备: {device} {'='*20}")
     print(f"{'='*20} 所有结果将保存在: {output_dir} {'='*20}")
 
-
-    # 实验六：短周期，使用梯度累积，并从全部股票中采样200只进行训练。
     run_experiment(
-        trading_days_per_epoch=252,
-        learning_rate=3e-5,
-        max_epochs=4000,
-        patience=1000,
+        trading_days_per_epoch=config['trading_days_per_epoch'],
+        learning_rate=config['learning_rate'],
+        max_epochs=config['max_epochs'],
+        patience=config['patience'],
+        min_delta=config['min_delta'],
         device=device,
-        batch_size=30,
-        sample_size=200, # 每次训练只看200只股票
-        output_dir=output_dir,
-        min_delta=1e-20
+        batch_size=config['batch_size'],
+        sample_size=config['sample_size'],
+        output_dir=output_dir
     )
 
+
 if __name__ == '__main__':
-    main()
+    config = {
+        'trading_days_per_epoch': 252,
+        'learning_rate': 3e-5,
+        'max_epochs': 100,
+        'patience': 100,
+        'min_delta': 1e-20,
+        'batch_size': 10,
+        'sample_size': 20,
+    }
+
+    main(config)

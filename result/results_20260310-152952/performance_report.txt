@@ -1,0 +1,84 @@
+
+==============================
+实验设置: Epoch长度=252天_样本数=20
+==============================
+
+--- 损失函数: 最大化收益 ---
+Annualized Return: 0.0504
+Sharpe Ratio: 36.8305
+Sortino Ratio: 289.0650
+Max Drawdown: -0.0000
+CVaR (5%): -0.0000
+Beta: 1.0086
+IR: 36.8305
+-------------------------
+
+--- 损失函数: 最大化夏普比率 ---
+Annualized Return: 0.0496
+Sharpe Ratio: 36.9034
+Sortino Ratio: 61.8395
+Max Drawdown: -0.0002
+CVaR (5%): -0.0000
+Beta: 1.0046
+IR: 36.9034
+-------------------------
+
+--- 损失函数: 最大化索提诺比率 ---
+Annualized Return: 0.0509
+Sharpe Ratio: 38.0479
+Sortino Ratio: 148.2811
+Max Drawdown: -0.0001
+CVaR (5%): -0.0000
+Beta: 1.0039
+IR: 38.0479
+-------------------------
+
+--- 损失函数: 最小化最大回撤 ---
+Annualized Return: 0.0492
+Sharpe Ratio: 34.3607
+Sortino Ratio: 81.9126
+Max Drawdown: -0.0001
+CVaR (5%): -0.0000
+Beta: 0.9964
+IR: 34.3607
+-------------------------
+
+--- 损失函数: 最小化CVaR ---
+Annualized Return: 0.0502
+Sharpe Ratio: 34.6227
+Sortino Ratio: 128.0212
+Max Drawdown: -0.0001
+CVaR (5%): -0.0000
+Beta: 1.0097
+IR: 34.6227
+-------------------------
+
+--- 损失函数: 收益-波动 ---
+Annualized Return: 0.0501
+Sharpe Ratio: 36.2619
+Sortino Ratio: 77.0508
+Max Drawdown: -0.0001
+CVaR (5%): -0.0000
+Beta: 0.9966
+IR: 36.2619
+-------------------------
+
+--- 损失函数: 收益-CVaR ---
+Annualized Return: 0.0504
+Sharpe Ratio: 34.8244
+Sortino Ratio: 108.7404
+Max Drawdown: -0.0001
+CVaR (5%): -0.0000
+Beta: 1.0056
+IR: 34.8244
+-------------------------
+
+--- 损失函数: 夏普+索提诺 ---
+Annualized Return: 0.0490
+Sharpe Ratio: 37.3422
+Sortino Ratio: 103.4972
+Max Drawdown: -0.0001
+CVaR (5%): -0.0000
+Beta: 0.9954
+IR: 37.3422
+-------------------------
