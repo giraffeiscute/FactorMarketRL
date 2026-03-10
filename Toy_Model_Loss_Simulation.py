@@ -5,6 +5,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 import os
 import datetime
+import time
+from tqdm import tqdm
 from matplotlib.font_manager import FontProperties #! <--- ADDED: 导入字体管理器
 
 # --- 0. 初始化设置 ---
@@ -159,8 +161,8 @@ def loss_sharpe_sortino(p, a=0.5): return a * loss_sharpe(p) + (1 - a) * loss_so
 
 
 # --- 4. 训练与评估函数 (已重构以支持采样和评估) ---
-def train_and_evaluate(loss_function, loss_name, env, learning_rate, device, 
-                       sample_size, batch_size=1, max_epochs=500, patience=10, min_delta=1e-20):
+def train_and_evaluate(loss_function, loss_name, env, learning_rate, device,
+                       sample_size, batch_size, max_epochs, patience, min_delta):
     """
     完整的训练和评估流程，支持采样、梯度累积和早停。
     """
@@ -171,11 +173,14 @@ def train_and_evaluate(loss_function, loss_name, env, learning_rate, device,
     stock_embeddings = env.stock_embeddings.to(device)
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
     
-    epoch = 0
     best_loss = float('inf')
     patience_counter = patience
-    
-    while epoch < max_epochs:
+
+    progress_bar = tqdm(range(max_epochs), desc=f"Training {loss_name}", unit="epoch")
+    completed_epochs = 0
+
+    for epoch in progress_bar:
+        epoch_start_time = time.time()
         optimizer.zero_grad()
         total_loss_in_batch = 0.0
 
@@ -202,8 +207,11 @@ def train_and_evaluate(loss_function, loss_name, env, learning_rate, device,
         optimizer.step()
         
         avg_loss_in_batch = total_loss_in_batch / batch_size
-        if (epoch + 1) % 50 == 0:
-            print(f"Epoch [{epoch+1}/{max_epochs}], Avg Loss: {avg_loss_in_batch:.6f}")
+        epoch_elapsed_time = time.time() - epoch_start_time
+        progress_bar.set_postfix(loss=f"{avg_loss_in_batch:.6f}", epoch_time=f"{epoch_elapsed_time:.2f}s")
+        if (epoch + 1) % 50 == 0: # 每50个epoch打印一次日志
+            print(f"[{loss_name}] Epoch {epoch+1}/{max_epochs} finished in {epoch_elapsed_time:.2f}s, loss={avg_loss_in_batch:.6f}")
+        completed_epochs = epoch + 1
             
         # --- 早停逻辑 ---
         if best_loss - avg_loss_in_batch > min_delta:
@@ -214,9 +222,10 @@ def train_and_evaluate(loss_function, loss_name, env, learning_rate, device,
         if patience_counter <= 0:
             print(f"早停机制触发于 Epoch {epoch+1}。")
             break
-        epoch += 1
 
-    print(f"--- {loss_name} 训练完成 (共 {epoch} 个 epochs), 开始评估 ---")
+    progress_bar.close()
+
+    print(f"--- {loss_name} 训练完成 (共 {completed_epochs} 个 epochs), 开始评估 ---")
     
     # --- 评估逻辑 (在所有股票上评估，以获得全局表现) ---
     with torch.no_grad():
@@ -233,8 +242,8 @@ def train_and_evaluate(loss_function, loss_name, env, learning_rate, device,
 
 
 # --- 5. 实验运行与结果输出 (已修改绘图部分) ---
-def run_experiment(trading_days_per_epoch, learning_rate, max_epochs, patience, device, batch_size, sample_size,
-                   output_dir):
+def run_experiment(trading_days_per_epoch, learning_rate, max_epochs, patience, min_delta,
+                   device, batch_size, sample_size, output_dir):
     exp_name = f"Epoch长度={trading_days_per_epoch}天_样本数={sample_size}"
     print(f"\n{'=' * 35}\n 开始新一轮实验: {exp_name} \n{'=' * 35}\n")
     env = MarketEnvironment(trading_days=trading_days_per_epoch)
@@ -261,8 +270,16 @@ def run_experiment(trading_days_per_epoch, learning_rate, max_epochs, patience, 
 
     for name, loss_func in loss_functions.items():
         weights, cumulative_returns, performance = train_and_evaluate(
-            loss_func, name, env, learning_rate, device, sample_size, batch_size,
-            max_epochs=max_epochs, patience=patience
+            loss_func,
+            name,
+            env,
+            learning_rate,
+            device,
+            sample_size,
+            batch_size,
+            max_epochs,
+            patience,
+            min_delta
         )
         results[name] = {'weights': weights, 'cumulative_returns': cumulative_returns, 'performance': performance}
         print("\n最终表现指标:")
@@ -325,12 +342,13 @@ def main():
     run_experiment(
         trading_days_per_epoch=252,
         learning_rate=3e-5,
-        max_epochs=40000,
+        max_epochs=4000,
         patience=1000,
         device=device,
         batch_size=30,
         sample_size=200, # 每次训练只看200只股票
-        output_dir=output_dir
+        output_dir=output_dir,
+        min_delta=1e-20
     )
 
 if __name__ == '__main__':
