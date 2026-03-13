@@ -2,10 +2,9 @@
 這個模組是整個 toy FF generator 的主流程。
 
 本次更新重點：
-1. 因子改成 3 維向量 AR(1)
-2. characteristic 改成具有慣性的動態過程
-
-其餘輸出表頭與主流程順序盡量維持相容。
+1. 因子保留目前的 3 維向量 AR(1)
+2. characteristic 從單一 scalar 升級成三維 characteristic vector
+3. beta 改成對三維 characteristic 做線性組合
 """
 
 from __future__ import annotations
@@ -41,6 +40,7 @@ from toy_ff_generator.utils import (
     set_random_seed,
 )
 from toy_ff_generator.validation import (
+    validate_component_row_count,
     validate_panel_row_count,
     validate_simulation_inputs,
 )
@@ -49,15 +49,15 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 STATE_ORDER = (-1, 0, 1)
 
 
-def _default_per_stock_characteristic_params(n: int) -> dict[str, list[float]]:
-    """建立預設的 per-stock characteristic 參數。"""
+def _default_per_stock_characteristic_params(n: int) -> dict[str, list[list[float]]]:
+    """建立預設的 per-stock 三維 characteristic 參數。"""
 
     return {
-        "Omega_i": [0.50 + 0.05 * (idx % 3) for idx in range(n)],
-        "mu_i": [-0.05 + 0.02 * (idx % 4) for idx in range(n)],
-        "Lambda_i": [0.10 + 0.03 * (idx % 3) for idx in range(n)],
-        "sigma_C_i": [0.35 + 0.05 * (idx % 4) for idx in range(n)],
-        "C0_i": [-0.20 + 0.10 * (idx % 5) for idx in range(n)],
+        "Omega_i": [[0.55, 0.45, 0.35] for _ in range(n)],
+        "mu_i": [[-0.05, 0.00, 0.04] for _ in range(n)],
+        "Lambda_i": [[0.08, 0.03, -0.02] for _ in range(n)],
+        "sigma_C_i": [[0.35, 0.30, 0.25] for _ in range(n)],
+        "C0_i": [[0.00, 0.00, 0.00] for _ in range(n)],
     }
 
 
@@ -82,7 +82,7 @@ def build_default_config() -> dict[str, Any]:
         "simulation_setup": {
             "N": N,
             "T": 10,
-            "random_seed": 42,
+            "random_seed": 424,
         },
         "market_state_setup": {
             "state_sequence": None,
@@ -120,20 +120,20 @@ def build_default_config() -> dict[str, Any]:
         "characteristic_setup": {
             "use_shared_characteristic_params": True,
             "shared_params": {
-                "Omega": 0.65,
-                "mu_C": 0.00,
-                "Lambda_C": 0.25,
-                "sigma_C": 0.45,
-                "C0": 0.00,
+                "Omega": [0.65, 0.50, 0.35],
+                "mu_C": [0.00, 0.03, -0.02],
+                "Lambda_C": [0.20, 0.05, -0.03],
+                "sigma_C": [0.45, 0.35, 0.25],
+                "C0": [0.00, 0.00, 0.00],
             },
             "per_stock_params": _default_per_stock_characteristic_params(N),
         },
         "exposure_setup": {
-            "a_mkt": 0.40,
+            "a_mkt": [0.40, -0.10, 0.20],
+            "a_smb": [0.15, 0.25, -0.05],
+            "a_hml": [-0.20, 0.10, 0.30],
             "b_mkt": 1.00,
-            "a_smb": 0.25,
             "b_smb": 0.10,
-            "a_hml": -0.15,
             "b_hml": 0.05,
         },
         "alpha_setup": {
@@ -163,7 +163,7 @@ def _build_state_sequence(
     market_state_setup: Mapping[str, Any],
     rng: np.random.Generator,
 ) -> list[int]:
-    """建立本次模擬實際使用的 state sequence。"""
+    """建立本次模擬實際使用的 scalar regime sequence。"""
 
     manual_sequence = market_state_setup.get("state_sequence")
     if manual_sequence is not None:
@@ -192,12 +192,6 @@ def _build_initial_prices(
         return {stock_id: initial_price for stock_id in stock_ids}
 
     per_stock_initial_price = clipping_price_setup["per_stock_initial_price"]
-    if isinstance(per_stock_initial_price, Mapping):
-        return {
-            stock_id: float(per_stock_initial_price[stock_id])
-            for stock_id in stock_ids
-        }
-
     return {
         stock_id: float(price)
         for stock_id, price in zip(stock_ids, per_stock_initial_price, strict=True)
@@ -222,6 +216,9 @@ def _apply_overrides(
         updated["simulation_setup"]["random_seed"] = seed
     if N is not None:
         updated["simulation_setup"]["N"] = N
+        updated["characteristic_setup"]["per_stock_params"] = _default_per_stock_characteristic_params(N)
+        updated["epsilon_setup"]["per_stock_sigma_epsilon_i"] = _default_per_stock_sigma_epsilon(N)
+        updated["clipping_price_setup"]["per_stock_initial_price"] = _default_per_stock_initial_prices(N)
     if T is not None:
         updated["simulation_setup"]["T"] = T
     if S is not None:
@@ -278,10 +275,10 @@ def run_simulation(
         market_state_setup={**market_state_setup, "state_sequence": state_sequence},
         factor_vector_ar_setup=factor_vector_ar_setup,
         characteristic_setup=characteristic_setup,
+        exposure_setup=exposure_setup,
         alpha_setup=alpha_setup,
         epsilon_setup=epsilon_setup,
         clipping_price_setup=clipping_price_setup,
-        stock_ids=stock_ids,
     )
 
     # 3. generate factors
@@ -309,6 +306,11 @@ def run_simulation(
         per_stock_params=characteristic_setup["per_stock_params"],
         rng=rng,
     )
+    validate_component_row_count(
+        name="characteristic_df",
+        df=characteristic_df,
+        expected_rows=simulation_setup["N"] * simulation_setup["T"],
+    )
 
     # 5. generate exposures
     beta_df = generate_exposures(
@@ -319,6 +321,11 @@ def run_simulation(
         b_smb=exposure_setup["b_smb"],
         a_hml=exposure_setup["a_hml"],
         b_hml=exposure_setup["b_hml"],
+    )
+    validate_component_row_count(
+        name="beta_df",
+        df=beta_df,
+        expected_rows=simulation_setup["N"] * simulation_setup["T"],
     )
 
     # 6. generate alpha
@@ -337,6 +344,11 @@ def run_simulation(
         shared_sigma_epsilon=epsilon_setup["shared_sigma_epsilon"],
         per_stock_sigma_epsilon_i=epsilon_setup["per_stock_sigma_epsilon_i"],
         rng=rng,
+    )
+    validate_component_row_count(
+        name="epsilon_df",
+        df=epsilon_df,
+        expected_rows=simulation_setup["N"] * simulation_setup["T"],
     )
 
     # 8. generate returns
@@ -374,7 +386,9 @@ def run_simulation(
         [
             "stock_id",
             "t",
-            "C",
+            "C1",
+            "C2",
+            "C3",
             "alpha",
             "beta_mkt",
             "beta_smb",

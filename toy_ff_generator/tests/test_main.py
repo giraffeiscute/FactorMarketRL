@@ -31,4 +31,5 @@ def test_main_pipeline_generates_required_outputs(tmp_path) -> None:
     assert metadata["simulation_setup"]["N"] == 4
     assert metadata["simulation_setup"]["T"] == 6
     assert metadata["market_state_setup"]["resolved_state_sequence"] == [1, 1, 1, 1, 1, 1]
+    assert {"C1", "C2", "C3"}.issubset(panel_df.columns)
     assert result["panel_long_df"].shape[0] == 24

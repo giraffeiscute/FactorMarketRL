@@ -51,6 +51,7 @@ $$
 
 - $\Phi$ 是 $3\times 3$ 矩陣
 - $\Delta$ 是長度為 3 的向量
+- $S_t$ 是 scalar regime state，不是矩陣
 - $S_t$ 會影響因子系統的均值位移
 - regime 也會影響 factor innovation covariance
 - bear / neutral / bull 可分別使用不同的 covariance matrix
@@ -85,33 +86,69 @@ $$
 
 ## Step 3：生成個股 characteristic
 
-這一版 characteristic 不再是每一期獨立抽樣，而是改成具有慣性（persistence / inertia）的動態過程。
+這一版 characteristic 不再是單一 scalar，也不再是每一期獨立抽樣，而是改成具有慣性（persistence / inertia）的三維動態向量。
 
 對每支股票 $i$，定義：
 
 $$
-C_{i,t}=\Omega_i C_{i,t-1}+\mu_i+\Lambda_i S_t+\xi_{i,t}
+C_{i,t}=
+\begin{bmatrix}
+C_{i,t}^{(1)}\\
+C_{i,t}^{(2)}\\
+C_{i,t}^{(3)}
+\end{bmatrix}
+$$
+
+並採用逐維遞迴形式：
+
+$$
+C_{i,t}=\Omega_i \odot C_{i,t-1}+\mu_i+\Lambda_i S_t+\xi_{i,t}
 $$
 
 其中：
 
 $$
-\xi_{i,t}\sim N(0,\sigma_{C,i}^2)
+\xi_{i,t}\sim N(0,\Sigma_{C,i})
+$$
+
+為了保持實作簡潔，現在採用 diagonal covariance 的版本，也就是三個 characteristic shock 彼此獨立：
+
+$$
+\Sigma_{C,i}=
+\operatorname{diag}\left(
+(\sigma_{C,i}^{(1)})^2,
+(\sigma_{C,i}^{(2)})^2,
+(\sigma_{C,i}^{(3)})^2
+\right)
+$$
+
+因此也可以逐維寫成：
+
+$$
+C_{i,t}^{(d)}=\Omega_i^{(d)} C_{i,t-1}^{(d)}+\mu_i^{(d)}+\Lambda_i^{(d)} S_t+\xi_{i,t}^{(d)},
+\qquad d\in\{1,2,3\}
+$$
+
+且
+
+$$
+\xi_{i,t}^{(d)} \sim N\left(0,(\sigma_{C,i}^{(d)})^2\right)
 $$
 
 這代表：
 
 - characteristic 不再是 i.i.d. across time
+- 每個 stock-time pair 都有一個 3 維 characteristic vector
 - $C_{i,t}$ 會依賴前一期的 $C_{i,t-1}$
-- $\Omega_i$ 控制 characteristic 的 persistence
+- $\Omega_i$ 控制各維 characteristic 的 persistence
 - 初值 $C_{i,0}$ 可手動設定
 
 目前支援兩種參數模式：
 
 - shared params：
-  所有股票共用同一組 $\Omega,\mu_C,\Lambda_C,\sigma_C,C_0$
+  所有股票共用同一組長度 3 的 $\Omega,\mu_C,\Lambda_C,\sigma_C,C_0$
 - per-stock params：
-  每支股票各自擁有 $\Omega_i,\mu_i,\Lambda_i,\sigma_{C,i},C_{i,0}$
+  每支股票各自擁有 shape 為 $(3,)$ 的 $\Omega_i,\mu_i,\Lambda_i,\sigma_{C,i},C_{i,0}$
 
 ---
 
@@ -123,13 +160,33 @@ $$
 \beta_{i,t,k}=g_k(C_{i,t})
 $$
 
-目前仍採最簡單的線性單調形式：
+目前仍採最簡單的線性形式，但因為 characteristic 已經是三維向量，所以改成：
 
 $$
-\beta_{i,t,k}=a_k C_{i,t}+b_k
+\beta_{i,t,k}=b_k+a_k^T C_{i,t}
 $$
 
-因此三個曝險分別為：
+其中：
+
+- $C_{i,t}$ 是長度 3 的 characteristic vector
+- $a_k$ 是長度 3 的 loading vector
+- $b_k$ 是 scalar
+
+也就是三個曝險分別為：
+
+$$
+\beta_{mkt}=b_{mkt}+a_{mkt}^T C_{i,t}
+$$
+
+$$
+\beta_{smb}=b_{smb}+a_{smb}^T C_{i,t}
+$$
+
+$$
+\beta_{hml}=b_{hml}+a_{hml}^T C_{i,t}
+$$
+
+對應程式中的欄位名稱：
 
 - `beta_mkt`
 - `beta_smb`
@@ -179,6 +236,7 @@ $$
 
 - factor dynamics
 - characteristic dynamics
+- beta 由單一 scalar characteristic 改成 characteristic vector 的線性映射
 
 目前不引入 return lag 結構。
 
@@ -205,38 +263,42 @@ $$
 
 ## (B) characteristic $C_{i,t}$ 的參數
 
-新版 characteristic 參數改成動態遞迴版本。
+新版 characteristic 參數改成三維動態遞迴版本。
 
 shared 模式下，主要參數為：
 
-- $\Omega$
-- $\mu_C$
-- $\Lambda_C$
-- $\sigma_C$
-- $C_0$
+- $\Omega$：長度 3
+- $\mu_C$：長度 3
+- $\Lambda_C$：長度 3
+- $\sigma_C$：長度 3
+- $C_0$：長度 3
 
 per-stock 模式下，主要參數為：
 
-- $\Omega_i$
-- $\mu_i$
-- $\Lambda_i$
-- $\sigma_{C,i}$
-- $C_{i,0}$
+- $\Omega_i$：shape $(N,3)$
+- $\mu_i$：shape $(N,3)$
+- $\Lambda_i$：shape $(N,3)$
+- $\sigma_{C,i}$：shape $(N,3)$
+- $C_{i,0}$：shape $(N,3)$
 
-也就是現在不再只是一組靜態的 $\mu_C,\lambda_C,\sigma_C$ 抽樣設定，而是完整描述 characteristic 慣性過程的參數。
+也就是現在不再是一組單一 scalar 的 $\mu_C,\lambda_C,\sigma_C$ 抽樣設定，而是完整描述三維 characteristic 慣性過程的參數。
 
 ## (C) beta 函數 $g_k(\cdot)$ 的參數
 
-目前仍使用線性形式：
+目前使用向量線性形式：
 
 $$
-\beta_{i,t,k}=a_k C_{i,t}+b_k
+\beta_{i,t,k}=b_k+a_k^T C_{i,t}
 $$
 
 對應需要設定：
 
-- $a_1,a_2,a_3$
-- $b_1,b_2,b_3$
+- `a_mkt`：長度 3
+- `a_smb`：長度 3
+- `a_hml`：長度 3
+- `b_mkt`
+- `b_smb`
+- `b_hml`
 
 分別對應：
 
@@ -341,12 +403,12 @@ $$
 對應資料表欄位格式為：
 
 - `factor_df`: `[t, MKT, SMB, HML]`
-- `characteristic_df`: `[stock_id, t, C]`
+- `characteristic_df`: `[stock_id, t, C1, C2, C3]`
 - `beta_df`: `[stock_id, t, beta_mkt, beta_smb, beta_hml]`
 - `alpha_df`: `[stock_id, alpha]`
 - `epsilon_df`: `[stock_id, t, epsilon]`
 - `panel_long_df` 至少包含：
-  `[stock_id, t, C, alpha, beta_mkt, beta_smb, beta_hml, MKT, SMB, HML, epsilon, raw_return, return, price]`
+  `[stock_id, t, C1, C2, C3, alpha, beta_mkt, beta_smb, beta_hml, MKT, SMB, HML, epsilon, raw_return, return, price]`
 
 ---
 
@@ -372,12 +434,20 @@ $$
 $$
 
 $$
-C_{i,t}=\Omega_i C_{i,t-1}+\mu_i+\Lambda_i S_t+\xi_{i,t},\qquad
-\xi_{i,t}\sim N(0,\sigma_{C,i}^2)
+C_{i,t}=\Omega_i \odot C_{i,t-1}+\mu_i+\Lambda_i S_t+\xi_{i,t}
 $$
 
 $$
-\beta_{i,t,k}=a_k C_{i,t}+b_k,\qquad k=1,2,3
+\xi_{i,t}\sim N(0,\Sigma_{C,i}),\qquad
+\Sigma_{C,i}=\operatorname{diag}\left(
+(\sigma_{C,i}^{(1)})^2,
+(\sigma_{C,i}^{(2)})^2,
+(\sigma_{C,i}^{(3)})^2
+\right)
+$$
+
+$$
+\beta_{i,t,k}=b_k+a_k^T C_{i,t},\qquad k=1,2,3
 $$
 
 $$
@@ -424,8 +494,8 @@ src/toy_ff_generator/main.py
 - `random_seed`
 - `state_sequence` 或 `transition_matrix`
 - factor vector AR 參數
-- characteristic inertia 參數
-- exposure 參數
+- characteristic vector inertia 參數
+- exposure loading vectors
 - alpha / epsilon / clipping / price / output 參數
 
 ## 輸出格式
@@ -447,7 +517,7 @@ src/toy_ff_generator/main.py
 3. `panel_long.csv`
    - long panel 格式
    - 欄位至少包含：
-     `stock_id, t, C, alpha, beta_mkt, beta_smb, beta_hml, MKT, SMB, HML, epsilon, raw_return, return, price`
+     `stock_id, t, C1, C2, C3, alpha, beta_mkt, beta_smb, beta_hml, MKT, SMB, HML, epsilon, raw_return, return, price`
 
 4. `metadata.json`
    - 儲存本次模擬所使用的主要設定參數
