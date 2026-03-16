@@ -416,39 +416,133 @@ $$
 
 為了方便快速回顧，核心模型可整理如下：
 
+i 表示資產（或公司）索引， 
+
+j 表示公司特徵（characteristic）的索引  
+
+k 表示風險因子（factor）的索引，  對應 Fama–French 三因子：
+$
+(\mathrm{MKT},\ \mathrm{SMB},\ \mathrm{HML})
+$
+
+
 $$
 S_t\in\{-1,0,1\}
 $$
 
 $$
-X_t=[MKT_t,SMB_t,HML_t]^T
+\mathbf{X}_t =
+\begin{bmatrix}
+\mathrm{MKT}_t \\
+\mathrm{SMB}_t \\
+\mathrm{HML}_t
+\end{bmatrix}
 $$
 
-$$
-X_t=\Phi X_{t-1}+\Delta S_t+u_t,\qquad
-u_t\sim N(0,\Sigma_X(S_t))
-$$
 
 $$
-\Sigma_X(S_t)\in\left\{\Sigma_X^{bear},\Sigma_X^{neutral},\Sigma_X^{bull}\right\}
-$$
-
-$$
-C_{i,t}=\Omega_i \odot C_{i,t-1}+\mu_i+\Lambda_i S_t+\xi_{i,t}
-$$
-
-$$
-\xi_{i,t}\sim N(0,\Sigma_{C,i}),\qquad
-\Sigma_{C,i}=\operatorname{diag}\left(
-(\sigma_{C,i}^{(1)})^2,
-(\sigma_{C,i}^{(2)})^2,
-(\sigma_{C,i}^{(3)})^2
+\mathbf{X}_t
+=
+\Phi \mathbf{X}_{t-1}
++
+\Delta S_t
++
+\mathbf{u}_t,
+\qquad
+\mathbf{u}_t \sim \mathcal{N}\!\left(\mathbf{0},\,\Sigma_X(S_t)\right)
+\qquad
+\left(
+\Phi \in \mathbb{R}^{3\times 3},\ 
+\Delta \in \mathbb{R}^{3\times 1},\ 
+\mathbf{u}_t \in \mathbb{R}^{3\times 1},\ 
+\Sigma_X(S_t)\in\mathbb{R}^{3\times 3}
 \right)
 $$
 
 $$
-\beta_{i,t,k}=b_k+a_k^T C_{i,t},\qquad k=1,2,3
+\Sigma_X(S_t)
+\in
+\left\{
+\Sigma_X^{\mathrm{bear}},
+\Sigma_X^{\mathrm{neutral}},
+\Sigma_X^{\mathrm{bull}}
+\right\}
+\qquad
+\left(
+\Sigma_X^{\mathrm{bear}},
+\Sigma_X^{\mathrm{neutral}},
+\Sigma_X^{\mathrm{bull}}
+\in \mathbb{R}^{3\times 3}
+\right)
 $$
+
+$$
+\mathbf{C}_{i,t}
+:=
+\left\{
+C_{i,t}^{(1)},
+C_{i,t}^{(2)},
+C_{i,t}^{(3)}
+\right\}
+\qquad
+\left(
+C_{i,t}^{(j)} \in \mathbb{R}
+\right)
+$$
+
+$$
+C_{i,t}^{(j)}
+=
+\omega_i^{(j)} C_{i,t-1}^{(j)}
++
+\mu_i^{(j)}
++
+\lambda_i^{(j)} S_t
++
+\xi_{i,t}^{(j)},
+\qquad j=1,2,3
+\qquad
+\left(
+\omega_i^{(j)},\mu_i^{(j)},\lambda_i^{(j)},\xi_{i,t}^{(j)},C_{i,t}^{(j)} \in \mathbb{R}
+\right)
+$$
+
+$$
+\xi_{i,t}^{(j)}
+\sim
+\mathcal{N}\!\left(0,\,\left(\sigma_{C,i}^{(j)}\right)^2\right),
+\qquad j=1,2,3
+
+$$
+
+$$
+\Sigma_{C,i}
+=
+\operatorname{diag}
+\left(
+(\sigma_{C,i}^{(1)})^2,
+(\sigma_{C,i}^{(2)})^2,
+(\sigma_{C,i}^{(3)})^2
+\right)
+\qquad
+\left(
+\Sigma_{C,i}\in\mathbb{R}^{3\times 3}
+\right)
+$$
+
+$$
+\beta_{i,t,k}
+=
+b_k
++
+\sum_{j=1}^{3} a_{k,j} C_{i,t}^{(j)},
+\qquad k=1,2,3
+\qquad
+\left(
+\beta_{i,t,k},\, b_k,\, a_{k,j},\, C_{i,t}^{(j)} \in \mathbb{R}
+\right)
+$$
+
 
 $$
 r_{i,t}=\alpha_i+\beta_{i,t,1}MKT_t+\beta_{i,t,2}SMB_t+\beta_{i,t,3}HML_t+\varepsilon_{i,t}
