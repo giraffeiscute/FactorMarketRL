@@ -10,7 +10,27 @@ from typing import Mapping, Sequence
 import numpy as np
 import pandas as pd
 
+from toy_ff_generator.characteristics import (
+    FIRM_CHARACTERISTIC_COLUMNS,
+    LATENT_STATE_COLUMNS,
+    LATENT_STATE_DIM,
+)
+
 STATE_VALUES = (-1, 0, 1)
+
+
+def _latent_state_shape_message(expected_shape: tuple[int, ...]) -> str:
+    return (
+        f"must have shape {expected_shape} for the latent state order "
+        f"{LATENT_STATE_COLUMNS}"
+    )
+
+
+def _observable_characteristic_shape_message(expected_shape: tuple[int, ...]) -> str:
+    return (
+        f"must have shape {expected_shape} for the observable firm characteristic order "
+        f"{FIRM_CHARACTERISTIC_COLUMNS}"
+    )
 
 
 def _validate_positive(name: str, value: float) -> None:
@@ -37,6 +57,29 @@ def _coerce_array(values: Sequence[float] | Sequence[Sequence[float]], name: str
         return np.asarray(values, dtype=float)
     except Exception as exc:  # pragma: no cover - defensive
         raise ValueError(f"{name} could not be converted to a numeric array.") from exc
+
+
+def _validate_latent_state_array_shape(
+    name: str,
+    array: np.ndarray,
+    expected_shape: tuple[int, ...],
+) -> None:
+    if array.shape != expected_shape:
+        raise ValueError(
+            f"{name} {_latent_state_shape_message(expected_shape)}. Received {array.shape}."
+        )
+
+
+def _validate_observable_array_shape(
+    name: str,
+    array: np.ndarray,
+    expected_shape: tuple[int, ...],
+) -> None:
+    if array.shape != expected_shape:
+        raise ValueError(
+            f"{name} {_observable_characteristic_shape_message(expected_shape)}. "
+            f"Received {array.shape}."
+        )
 
 
 def _validate_covariance_matrix(name: str, matrix: Sequence[Sequence[float]], shape: tuple[int, int]) -> None:
@@ -105,7 +148,7 @@ def validate_factor_setup(factor_vector_ar_setup: Mapping[str, object]) -> None:
 
     has_explicit_means = any(value is not None for value in (mu_bear, mu_neutral, mu_bull))
     if has_explicit_means:
-        if None in (mu_bear, mu_neutral, mu_bull):
+        if any(value is None for value in (mu_bear, mu_neutral, mu_bull)):
             raise ValueError(
                 "mu_bear, mu_neutral, and mu_bull must all be provided together."
             )
@@ -147,84 +190,139 @@ def validate_factor_setup(factor_vector_ar_setup: Mapping[str, object]) -> None:
     _validate_covariance_matrix("Sigma_X_bull", factor_vector_ar_setup["Sigma_X_bull"], (3, 3))
 
 
-def validate_characteristic_setup(
+def validate_latent_characteristic_setup(
     N: int,
-    characteristic_setup: Mapping[str, object],
+    latent_characteristic_setup: Mapping[str, object],
 ) -> None:
-    """檢查三維 characteristic vector 參數。"""
+    """檢查二維 latent characteristic state 參數。"""
 
-    use_shared = bool(characteristic_setup["use_shared_characteristic_params"])
+    use_shared = bool(latent_characteristic_setup["use_shared_latent_state_params"])
     if use_shared:
-        shared_params = characteristic_setup.get("shared_params")
+        shared_params = latent_characteristic_setup.get("shared_params")
         if shared_params is None:
             raise ValueError(
-                "shared_params must be provided when use_shared_characteristic_params is True."
+                "shared_params must be provided when use_shared_latent_state_params is True."
             )
 
         omega = _coerce_array(shared_params["Omega"], "Omega")
-        mu = _coerce_array(shared_params["mu_C"], "mu_C")
-        lambda_vector = _coerce_array(shared_params["Lambda_C"], "Lambda_C")
-        sigma = _coerce_array(shared_params["sigma_C"], "sigma_C")
-        c0 = _coerce_array(shared_params["C0"], "C0")
+        mu = _coerce_array(shared_params["mu_X"], "mu_X")
+        lambda_vector = _coerce_array(shared_params["lambda_X"], "lambda_X")
+        sigma = _coerce_array(shared_params["sigma_X"], "sigma_X")
+        x0 = _coerce_array(shared_params["X0"], "X0")
 
-        if omega.shape != (3,):
-            raise ValueError(f"Omega must have shape (3,). Received {omega.shape}.")
-        if mu.shape != (3,):
-            raise ValueError(f"mu_C must have shape (3,). Received {mu.shape}.")
-        if lambda_vector.shape != (3,):
-            raise ValueError(f"Lambda_C must have shape (3,). Received {lambda_vector.shape}.")
-        if sigma.shape != (3,):
-            raise ValueError(f"sigma_C must have shape (3,). Received {sigma.shape}.")
-        if c0.shape != (3,):
-            raise ValueError(f"C0 must have shape (3,). Received {c0.shape}.")
+        _validate_latent_state_array_shape("Omega", omega, (LATENT_STATE_DIM,))
+        _validate_latent_state_array_shape("mu_X", mu, (LATENT_STATE_DIM,))
+        _validate_latent_state_array_shape("lambda_X", lambda_vector, (LATENT_STATE_DIM,))
+        _validate_latent_state_array_shape("sigma_X", sigma, (LATENT_STATE_DIM,))
+        _validate_latent_state_array_shape("X0", x0, (LATENT_STATE_DIM,))
         if np.any(sigma <= 0):
-            raise ValueError("Every component of sigma_C must be > 0.")
+            raise ValueError("Every component of sigma_X must be > 0.")
         if np.any(np.abs(omega) >= 1.0):
             raise ValueError("Every component of Omega must satisfy abs(Omega) < 1.")
         return
 
-    per_stock_params = characteristic_setup.get("per_stock_params")
+    per_stock_params = latent_characteristic_setup.get("per_stock_params")
     if per_stock_params is None:
         raise ValueError(
-            "per_stock_params must be provided when use_shared_characteristic_params is False."
+            "per_stock_params must be provided when use_shared_latent_state_params is False."
         )
 
     omega = _coerce_array(per_stock_params["Omega_i"], "Omega_i")
     mu = _coerce_array(per_stock_params["mu_i"], "mu_i")
-    lambda_vector = _coerce_array(per_stock_params["Lambda_i"], "Lambda_i")
-    sigma = _coerce_array(per_stock_params["sigma_C_i"], "sigma_C_i")
-    c0 = _coerce_array(per_stock_params["C0_i"], "C0_i")
+    lambda_vector = _coerce_array(per_stock_params["lambda_i"], "lambda_i")
+    sigma = _coerce_array(per_stock_params["sigma_X_i"], "sigma_X_i")
+    x0 = _coerce_array(per_stock_params["X0_i"], "X0_i")
 
-    if omega.shape != (N, 3):
-        raise ValueError(f"Omega_i must have shape (N, 3). Received {omega.shape}.")
-    if mu.shape != (N, 3):
-        raise ValueError(f"mu_i must have shape (N, 3). Received {mu.shape}.")
-    if lambda_vector.shape != (N, 3):
-        raise ValueError(f"Lambda_i must have shape (N, 3). Received {lambda_vector.shape}.")
-    if sigma.shape != (N, 3):
-        raise ValueError(f"sigma_C_i must have shape (N, 3). Received {sigma.shape}.")
-    if c0.shape != (N, 3):
-        raise ValueError(f"C0_i must have shape (N, 3). Received {c0.shape}.")
-    if np.any(mu < 0):
-        raise ValueError("Every component of mu_i must be >= 0.")
+    latent_matrix_shape = (N, LATENT_STATE_DIM)
+    _validate_latent_state_array_shape("Omega_i", omega, latent_matrix_shape)
+    _validate_latent_state_array_shape("mu_i", mu, latent_matrix_shape)
+    _validate_latent_state_array_shape("lambda_i", lambda_vector, latent_matrix_shape)
+    _validate_latent_state_array_shape("sigma_X_i", sigma, latent_matrix_shape)
+    _validate_latent_state_array_shape("X0_i", x0, latent_matrix_shape)
     if np.any(sigma <= 0):
-        raise ValueError("Every component of sigma_C_i must be > 0.")
+        raise ValueError("Every component of sigma_X_i must be > 0.")
     if np.any(np.abs(omega) >= 1.0):
         raise ValueError("Every component of Omega_i must satisfy abs(Omega_i) < 1.")
 
 
 def validate_exposure_setup(exposure_setup: Mapping[str, object]) -> None:
-    """檢查 exposure loading vectors 與 scalar intercepts。"""
+    """檢查 beta 對 latent state 的 loading vectors 與 scalar intercepts。"""
 
     for vector_name in ("a_mkt", "a_smb", "a_hml"):
         vector = _coerce_array(exposure_setup[vector_name], vector_name)
-        if vector.shape != (3,):
-            raise ValueError(f"{vector_name} must have shape (3,). Received {vector.shape}.")
+        _validate_latent_state_array_shape(vector_name, vector, (LATENT_STATE_DIM,))
 
     for scalar_name in ("b_mkt", "b_smb", "b_hml"):
         scalar_value = np.asarray(exposure_setup[scalar_name], dtype=float)
         if scalar_value.shape != ():
             raise ValueError(f"{scalar_name} must be a scalar. Received shape {scalar_value.shape}.")
+
+
+def validate_latent_state_df(
+    latent_state_df: pd.DataFrame,
+    expected_rows: int,
+) -> None:
+    """檢查 latent state dataframe 的欄位完整性與 shape。"""
+
+    if len(latent_state_df) != expected_rows:
+        raise ValueError(
+            "latent_state_df row count does not match expectation. "
+            f"Expected {expected_rows}, received {len(latent_state_df)}."
+        )
+
+    missing_columns = [
+        column_name
+        for column_name in LATENT_STATE_COLUMNS
+        if column_name not in latent_state_df.columns
+    ]
+    if missing_columns:
+        raise ValueError(
+            "latent_state_df is missing required latent state columns "
+            f"{missing_columns}. Expected {LATENT_STATE_COLUMNS}."
+        )
+
+    latent_state_matrix = latent_state_df[LATENT_STATE_COLUMNS].to_numpy(dtype=float)
+    _validate_latent_state_array_shape(
+        "latent_state_df latent block",
+        latent_state_matrix,
+        (expected_rows, LATENT_STATE_DIM),
+    )
+
+
+def validate_firm_characteristics_df(
+    firm_characteristics_df: pd.DataFrame,
+    expected_rows: int,
+) -> None:
+    """檢查 observable firm characteristics 的 shape 與正值條件。"""
+
+    if len(firm_characteristics_df) != expected_rows:
+        raise ValueError(
+            "firm_characteristics_df row count does not match expectation. "
+            f"Expected {expected_rows}, received {len(firm_characteristics_df)}."
+        )
+
+    missing_columns = [
+        column_name
+        for column_name in FIRM_CHARACTERISTIC_COLUMNS
+        if column_name not in firm_characteristics_df.columns
+    ]
+    if missing_columns:
+        raise ValueError(
+            "firm_characteristics_df is missing required observable columns "
+            f"{missing_columns}. Expected {FIRM_CHARACTERISTIC_COLUMNS}."
+        )
+
+    observable_matrix = firm_characteristics_df[FIRM_CHARACTERISTIC_COLUMNS].to_numpy(dtype=float)
+    _validate_observable_array_shape(
+        "firm_characteristics_df observable block",
+        observable_matrix,
+        (expected_rows, LATENT_STATE_DIM),
+    )
+    if np.any(observable_matrix <= 0):
+        raise ValueError(
+            "Observable firm characteristics must be strictly positive. "
+            "Received non-positive firm_size/book_to_price values."
+        )
 
 
 def validate_epsilon_setup(
@@ -289,7 +387,7 @@ def validate_simulation_inputs(
     T: int,
     market_state_setup: Mapping[str, object],
     factor_vector_ar_setup: Mapping[str, object],
-    characteristic_setup: Mapping[str, object],
+    latent_characteristic_setup: Mapping[str, object],
     exposure_setup: Mapping[str, object],
     alpha_setup: Mapping[str, object],
     epsilon_setup: Mapping[str, object],
@@ -304,7 +402,7 @@ def validate_simulation_inputs(
 
     validate_market_state_setup(T=T, market_state_setup=market_state_setup)
     validate_factor_setup(factor_vector_ar_setup=factor_vector_ar_setup)
-    validate_characteristic_setup(N=N, characteristic_setup=characteristic_setup)
+    validate_latent_characteristic_setup(N=N, latent_characteristic_setup=latent_characteristic_setup)
     validate_exposure_setup(exposure_setup=exposure_setup)
 
     _validate_positive("sigma_alpha", float(alpha_setup["sigma_alpha"]))

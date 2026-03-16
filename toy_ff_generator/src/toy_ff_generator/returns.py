@@ -8,23 +8,30 @@ from typing import Mapping, Sequence
 
 import pandas as pd
 
+from toy_ff_generator.characteristics import FIRM_CHARACTERISTIC_COLUMNS
+
 
 def build_panel(
-    characteristic_df: pd.DataFrame,
+    firm_characteristics_df: pd.DataFrame,
     beta_df: pd.DataFrame,
     alpha_df: pd.DataFrame,
     epsilon_df: pd.DataFrame,
     factor_df: pd.DataFrame,
 ) -> pd.DataFrame:
-    """把各個生成模組的輸出合併成 long panel。"""
+    """把各個生成模組的輸出合併成 long panel，包含每期市場 state。"""
 
-    characteristic_columns = [
+    missing_columns = [
         column_name
-        for column_name in characteristic_df.columns
-        if column_name.startswith("C")
+        for column_name in FIRM_CHARACTERISTIC_COLUMNS
+        if column_name not in firm_characteristics_df.columns
     ]
+    if missing_columns:
+        raise ValueError(
+            "firm_characteristics_df is missing required columns "
+            f"{missing_columns}. Expected {FIRM_CHARACTERISTIC_COLUMNS}."
+        )
 
-    panel_df = characteristic_df.merge(beta_df, on=["stock_id", "t"], how="inner")
+    panel_df = firm_characteristics_df.merge(beta_df, on=["stock_id", "t"], how="inner")
     panel_df = panel_df.merge(alpha_df, on="stock_id", how="inner")
     panel_df = panel_df.merge(epsilon_df, on=["stock_id", "t"], how="inner")
     panel_df = panel_df.merge(factor_df, on="t", how="inner")
@@ -33,7 +40,8 @@ def build_panel(
         [
             "stock_id",
             "t",
-            *characteristic_columns,
+            "state",
+            *FIRM_CHARACTERISTIC_COLUMNS,
             "alpha",
             "beta_mkt",
             "beta_smb",

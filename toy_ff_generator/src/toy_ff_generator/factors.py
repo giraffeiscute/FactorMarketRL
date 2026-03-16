@@ -54,7 +54,7 @@ def _resolve_regime_mean_vectors(
 
     has_explicit_means = any(value is not None for value in (mu_bear, mu_neutral, mu_bull))
     if has_explicit_means:
-        if None in (mu_bear, mu_neutral, mu_bull):
+        if any(value is None for value in (mu_bear, mu_neutral, mu_bull)):
             raise ValueError(
                 "mu_bear, mu_neutral, and mu_bull must all be provided together."
             )
@@ -115,7 +115,7 @@ def generate_factors(
     mu_neutral: Sequence[float] | None = None,
     mu_bull: Sequence[float] | None = None,
 ) -> pd.DataFrame:
-    """生成 3 維向量 AR(1) 的 factor panel。"""
+    """生成 3 維向量 AR(1) 的 factor panel，並保留每期對應的 state。"""
 
     phi_matrix = np.asarray(Phi, dtype=float)
     sigma_x_bear = np.asarray(Sigma_X_bear, dtype=float)
@@ -151,6 +151,7 @@ def generate_factors(
         rows.append(
             {
                 "t": time_label,
+                "state": int(state),
                 "MKT": float(current[0]),
                 "SMB": float(current[1]),
                 "HML": float(current[2]),

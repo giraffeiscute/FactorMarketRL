@@ -10,9 +10,8 @@ def test_returns_pipeline_small_manual_example() -> None:
         {
             "stock_id": ["stock_000", "stock_000", "stock_001", "stock_001"],
             "t": ["t_0", "t_1", "t_0", "t_1"],
-            "C1": [0.0, 0.0, 0.0, 0.0],
-            "C2": [0.0, 0.0, 0.0, 0.0],
-            "C3": [0.0, 0.0, 0.0, 0.0],
+            "firm_size": [1.0, 1.0, 1.0, 1.0],
+            "book_to_price": [1.0, 1.0, 1.0, 1.0],
             "alpha": [0.01, 0.01, -0.02, -0.02],
             "beta_mkt": [1.0, 1.0, 0.5, 0.5],
             "beta_smb": [0.5, 0.5, 0.0, 0.0],

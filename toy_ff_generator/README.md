@@ -86,7 +86,7 @@ $$
 
 ## Step 3：生成個股 characteristic
 
-這一版 characteristic 不再是單一 scalar，也不再是每一期獨立抽樣，而是改成具有慣性（persistence / inertia）的三維動態向量。
+這一版 characteristic 不再是單一 scalar，也不再是每一期獨立抽樣，而是改成具有慣性（persistence / inertia）的二維動態向量。
 
 對每支股票 $i$，定義：
 
@@ -94,10 +94,14 @@ $$
 C_{i,t}=
 \begin{bmatrix}
 C_{i,t}^{(1)}\\
-C_{i,t}^{(2)}\\
-C_{i,t}^{(3)}
+C_{i,t}^{(2)}
 \end{bmatrix}
 $$
+
+其中：
+
+- $C_{i,t}^{(1)}$ = size
+- $C_{i,t}^{(2)}$ = book-to-price
 
 並採用逐維遞迴形式：
 
@@ -111,14 +115,13 @@ $$
 \xi_{i,t}\sim N(0,\Sigma_{C,i})
 $$
 
-為了保持實作簡潔，現在採用 diagonal covariance 的版本，也就是三個 characteristic shock 彼此獨立：
+為了保持實作簡潔，現在採用 diagonal covariance 的版本，也就是兩個 characteristic shock 彼此獨立：
 
 $$
 \Sigma_{C,i}=
 \operatorname{diag}\left(
 (\sigma_{C,i}^{(1)})^2,
-(\sigma_{C,i}^{(2)})^2,
-(\sigma_{C,i}^{(3)})^2
+ (\sigma_{C,i}^{(2)})^2
 \right)
 $$
 
@@ -126,7 +129,7 @@ $$
 
 $$
 C_{i,t}^{(d)}=\Omega_i^{(d)} C_{i,t-1}^{(d)}+\mu_i^{(d)}+\Lambda_i^{(d)} S_t+\xi_{i,t}^{(d)},
-\qquad d\in\{1,2,3\}
+\qquad d\in\{1,2\}
 $$
 
 且
@@ -138,7 +141,7 @@ $$
 這代表：
 
 - characteristic 不再是 i.i.d. across time
-- 每個 stock-time pair 都有一個 3 維 characteristic vector
+- 每個 stock-time pair 都有一個 2 維 characteristic vector
 - $C_{i,t}$ 會依賴前一期的 $C_{i,t-1}$
 - $\Omega_i$ 控制各維 characteristic 的 persistence
 - 初值 $C_{i,0}$ 可手動設定
@@ -146,44 +149,45 @@ $$
 目前支援兩種參數模式：
 
 - shared params：
-  所有股票共用同一組長度 3 的 $\Omega,\mu_C,\Lambda_C,\sigma_C,C_0$
+  所有股票共用同一組長度 2 的 $\Omega,\mu_C,\Lambda_C,\sigma_C,C_0$
 - per-stock params：
-  每支股票各自擁有 shape 為 $(3,)$ 的 $\Omega_i,\mu_i,\Lambda_i,\sigma_{C,i},C_{i,0}$
+  每支股票各自擁有 shape 為 $(2,)$ 的 $\Omega_i,\mu_i,\Lambda_i,\sigma_{C,i},C_{i,0}$
 
 ---
 
-## Step 4：由 characteristic 生成因子曝險
+## Step 4：由 latent state 生成因子曝險
 
 對每支股票、每個時間點、每個因子曝險，定義：
 
 $$
-\beta_{i,t,k}=g_k(C_{i,t})
+\beta_{i,t,k}=g_k(Z_{i,t})
 $$
 
-目前仍採最簡單的線性形式，但因為 characteristic 已經是三維向量，所以改成：
+目前仍採最簡單的線性形式，並且直接使用二維 latent state：
 
 $$
-\beta_{i,t,k}=b_k+a_k^T C_{i,t}
+\beta_{i,t,k}=b_k+a_k^T Z_{i,t}
 $$
 
 其中：
 
-- $C_{i,t}$ 是長度 3 的 characteristic vector
-- $a_k$ 是長度 3 的 loading vector
+- $Z_{i,t}$ 是長度 2 的 latent state vector
+- $a_k$ 是長度 2 的 loading vector
 - $b_k$ 是 scalar
+- `firm_size = exp(Z_size)`、`book_to_price = exp(Z_btp)` 只保留給輸出、Excel 匯出與經濟展示
 
 也就是三個曝險分別為：
 
 $$
-\beta_{mkt}=b_{mkt}+a_{mkt}^T C_{i,t}
+\beta_{mkt}=b_{mkt}+a_{mkt}^T Z_{i,t}
 $$
 
 $$
-\beta_{smb}=b_{smb}+a_{smb}^T C_{i,t}
+\beta_{smb}=b_{smb}+a_{smb}^T Z_{i,t}
 $$
 
 $$
-\beta_{hml}=b_{hml}+a_{hml}^T C_{i,t}
+\beta_{hml}=b_{hml}+a_{hml}^T Z_{i,t}
 $$
 
 對應程式中的欄位名稱：
@@ -263,39 +267,39 @@ $$
 
 ## (B) characteristic $C_{i,t}$ 的參數
 
-新版 characteristic 參數改成三維動態遞迴版本。
+新版 characteristic 參數改成二維動態遞迴版本，順序為 size / book-to-price。
 
 shared 模式下，主要參數為：
 
-- $\Omega$：長度 3
-- $\mu_C$：長度 3
-- $\Lambda_C$：長度 3
-- $\sigma_C$：長度 3
-- $C_0$：長度 3
+- $\Omega$：長度 2
+- $\mu_C$：長度 2
+- $\Lambda_C$：長度 2
+- $\sigma_C$：長度 2
+- $C_0$：長度 2
 
 per-stock 模式下，主要參數為：
 
-- $\Omega_i$：shape $(N,3)$
-- $\mu_i$：shape $(N,3)$
-- $\Lambda_i$：shape $(N,3)$
-- $\sigma_{C,i}$：shape $(N,3)$
-- $C_{i,0}$：shape $(N,3)$
+- $\Omega_i$：shape $(N,2)$
+- $\mu_i$：shape $(N,2)$
+- $\Lambda_i$：shape $(N,2)$
+- $\sigma_{C,i}$：shape $(N,2)$
+- $C_{i,0}$：shape $(N,2)$
 
-也就是現在不再是一組單一 scalar 的 $\mu_C,\lambda_C,\sigma_C$ 抽樣設定，而是完整描述三維 characteristic 慣性過程的參數。
+也就是現在不再是一組單一 scalar 的 $\mu_C,\lambda_C,\sigma_C$ 抽樣設定，而是完整描述二維 characteristic 慣性過程的參數。
 
 ## (C) beta 函數 $g_k(\cdot)$ 的參數
 
 目前使用向量線性形式：
 
 $$
-\beta_{i,t,k}=b_k+a_k^T C_{i,t}
+\beta_{i,t,k}=b_k+a_k^T Z_{i,t}
 $$
 
 對應需要設定：
 
-- `a_mkt`：長度 3
-- `a_smb`：長度 3
-- `a_hml`：長度 3
+- `a_mkt`：長度 2
+- `a_smb`：長度 2
+- `a_hml`：長度 2
 - `b_mkt`
 - `b_smb`
 - `b_hml`
@@ -404,13 +408,13 @@ $$
 
 對應資料表欄位格式為：
 
-- `factor_df`: `[t, MKT, SMB, HML]`
-- `characteristic_df`: `[stock_id, t, C1, C2, C3]`
+- `factor_df`: `[t, state, MKT, SMB, HML]`
+- `characteristic_df`: `[stock_id, t, C1, C2]`，其中 `C1=size`、`C2=book_to_price`
 - `beta_df`: `[stock_id, t, beta_mkt, beta_smb, beta_hml]`
 - `alpha_df`: `[stock_id, alpha]`
 - `epsilon_df`: `[stock_id, t, epsilon]`
 - `panel_long_df` 至少包含：
-  `[stock_id, t, C1, C2, C3, alpha, beta_mkt, beta_smb, beta_hml, MKT, SMB, HML, epsilon, raw_return, return, price]`
+  `[stock_id, t, state, C1, C2, alpha, beta_mkt, beta_smb, beta_hml, MKT, SMB, HML, epsilon, raw_return, return, price]`
 
 ---
 
@@ -421,9 +425,15 @@ $$
 i 表示資產（或公司）索引， 
 
 k 表示風險因子（factor）的索引，  對應 Fama–French 三因子：
-$
+為了方便快速回顧，核心模型可整理如下：
+
+i 表示資產（或公司）索引， 
+
+k 表示風險因子（factor）的索引，對應 Fama–French 三因子：
+$$
 (\mathrm{MKT},\ \mathrm{SMB},\ \mathrm{HML})
-$
+$$
+
 
 
 $$
@@ -438,7 +448,6 @@ $$
 \mathrm{HML}_t
 \end{bmatrix}
 $$
-
 
 $$
 \mathbf{X}_t
@@ -457,7 +466,7 @@ $$
 \mathbf{u}_t \in \mathbb{R}^{3\times 1},\ 
 \Sigma_X(S_t)\in\mathbb{R}^{3\times 3}
 \right)
-$$ 
+$$
 
 $$
 \mu_X(S_t)
@@ -493,25 +502,23 @@ $$
 \right)
 $$
 
-
 $$
-\mathbf{C}_{i,t}
+\mathbf{Z}_{i,t}
 =
 \begin{bmatrix}
-C_{i,t}^{(1)} \\
-C_{i,t}^{(2)} \\
-C_{i,t}^{(3)}
+Z_{i,t}^{(\mathrm{size})} \\
+Z_{i,t}^{(\mathrm{btp})}
 \end{bmatrix}
 \qquad
 \left(
-\mathbf{C}_{i,t} \in \mathbb{R}^{3\times1}
+\mathbf{Z}_{i,t} \in \mathbb{R}^{2\times1}
 \right)
 $$
 
 $$
-\mathbf{C}_{i,t}
+\mathbf{Z}_{i,t}
 =
-\Omega_i \mathbf{C}_{i,t-1}
+\Omega_i \mathbf{Z}_{i,t-1}
 +
 \boldsymbol{\mu}_i
 +
@@ -522,10 +529,10 @@ $$
 
 $$
 \left(
-\Omega_i \in \mathbb{R}^{3\times3},\;
-\boldsymbol{\mu}_i \in \mathbb{R}^{3\times1},\;
-\boldsymbol{\lambda}_i \in \mathbb{R}^{3\times1},\;
-\boldsymbol{\xi}_{i,t} \in \mathbb{R}^{3\times1}
+\Omega_i \in \mathbb{R}^{2\times2},\;
+\boldsymbol{\mu}_i \in \mathbb{R}^{2\times1},\;
+\boldsymbol{\lambda}_i \in \mathbb{R}^{2\times1},\;
+\boldsymbol{\xi}_{i,t} \in \mathbb{R}^{2\times1}
 \right)
 $$
 
@@ -535,7 +542,7 @@ $$
 \mathcal{N}
 \left(
 \mathbf{0},
-\Sigma_{C,i}
+\Sigma_{Z,i}
 \right)
 $$
 
@@ -544,24 +551,55 @@ $$
 =
 \operatorname{diag}
 \left(
-\omega_i^{(1)},
-\omega_i^{(2)},
-\omega_i^{(3)}
+\omega_i^{(\mathrm{size})},
+\omega_i^{(\mathrm{btp})}
 \right)
 $$
 
 $$
-\Sigma_{C,i}
+\Sigma_{Z,i}
 =
 \operatorname{diag}
 \left(
-(\sigma_{C,i}^{(1)})^2,
-(\sigma_{C,i}^{(2)})^2,
-(\sigma_{C,i}^{(3)})^2
+(\sigma_{Z,i}^{(\mathrm{size})})^2,
+(\sigma_{Z,i}^{(\mathrm{btp})})^2
 \right)
 \qquad
 \left(
-\Sigma_{C,i}\in\mathbb{R}^{3\times3}
+\Sigma_{Z,i}\in\mathbb{R}^{2\times2}
+\right)
+$$
+
+$$
+\mathbf{C}_{i,t}^{\mathrm{obs}}
+=
+\begin{bmatrix}
+\mathrm{firm\_size}_{i,t} \\
+\mathrm{book\_to\_price}_{i,t}
+\end{bmatrix}
+=
+\exp\!\left(
+\mathbf{Z}_{i,t}
+\right)
+\qquad
+\left(
+\mathbf{C}_{i,t}^{\mathrm{obs}} \in \mathbb{R}_{+}^{2\times1}
+\right)
+$$
+
+$$
+\mathrm{firm\_size}_{i,t}
+=
+\exp\!\left(
+Z_{i,t}^{(\mathrm{size})}
+\right)
+$$
+
+$$
+\mathrm{book\_to\_price}_{i,t}
+=
+\exp\!\left(
+Z_{i,t}^{(\mathrm{btp})}
 \right)
 $$
 
@@ -571,28 +609,43 @@ $$
 b_k
 +
 \mathbf{a}_k^\top
-\mathbf{C}_{i,t},
+\mathbf{Z}_{i,t},
 \qquad
 k=1,2,3
 \qquad
 \left(
-\mathbf{a}_k \in \mathbb{R}^{3\times1},\;
+\mathbf{a}_k \in \mathbb{R}^{2\times1},\;
 \beta_{i,t,k},\, b_k \in \mathbb{R}
 \right)
 $$
 
+$$
+r_{i,t}
+=
+\alpha_i
++
+\beta_{i,t,1}\mathrm{MKT}_t
++
+\beta_{i,t,2}\mathrm{SMB}_t
++
+\beta_{i,t,3}\mathrm{HML}_t
++
+\varepsilon_{i,t}
+$$
 
 $$
-r_{i,t}=\alpha_i+\beta_{i,t,1}MKT_t+\beta_{i,t,2}SMB_t+\beta_{i,t,3}HML_t+\varepsilon_{i,t}
+r_{i,t}^{obs}
+=
+\operatorname{clip}(r_{i,t},\text{limit\_down},\text{limit\_up})
 $$
 
 $$
-r_{i,t}^{obs}=\operatorname{clip}(r_{i,t},\text{limit\_down},\text{limit\_up})
+P_{i,t}
+=
+P_{i,t-1}(1+r_{i,t}^{obs})
 $$
 
-$$
-P_{i,t}=P_{i,t-1}(1+r_{i,t}^{obs})
-$$
+註記: Book to Price Ratio = (總資產 - 總負債) / 流通股數
 
 ## 安裝
 
@@ -626,8 +679,8 @@ src/toy_ff_generator/main.py
 - `random_seed`
 - `state_sequence` 或 `transition_matrix`
 - factor vector AR 參數
-- characteristic vector inertia 參數
-- exposure loading vectors
+- characteristic size/value inertia 參數
+- exposure loading vectors（對應 size / book-to-price）
 - alpha / epsilon / clipping / price / output 參數
 
 ## 輸出格式
@@ -649,7 +702,7 @@ src/toy_ff_generator/main.py
 3. `panel_long.csv`
    - long panel 格式
    - 欄位至少包含：
-     `stock_id, t, C1, C2, C3, alpha, beta_mkt, beta_smb, beta_hml, MKT, SMB, HML, epsilon, raw_return, return, price`
+     `stock_id, t, state, C1, C2, alpha, beta_mkt, beta_smb, beta_hml, MKT, SMB, HML, epsilon, raw_return, return, price`
 
 4. `metadata.json`
    - 儲存本次模擬所使用的主要設定參數

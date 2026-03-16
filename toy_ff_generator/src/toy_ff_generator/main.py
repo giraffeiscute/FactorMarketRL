@@ -3,8 +3,8 @@
 
 本次更新重點：
 1. 因子保留目前的 3 維向量 AR(1)
-2. characteristic 從單一 scalar 升級成三維 characteristic vector
-3. beta 改成對三維 characteristic 做線性組合
+2. characteristic 先以二維 latent state 遞迴，再映射成正值的 firm characteristics
+3. beta 直接使用二維 latent state 做線性組合
 """
 
 from __future__ import annotations
@@ -23,7 +23,11 @@ if __package__ in {None, ""}:
         sys.path.insert(0, str(SRC_ROOT))
 
 from toy_ff_generator.alpha import generate_alpha
-from toy_ff_generator.characteristics import generate_characteristics
+from toy_ff_generator.characteristics import (
+    FIRM_CHARACTERISTIC_COLUMNS,
+    generate_latent_characteristic_states,
+    state_to_firm_characteristics,
+)
 from toy_ff_generator.exposures import generate_exposures
 from toy_ff_generator.factors import generate_factors
 from toy_ff_generator.noise import generate_noise
@@ -41,6 +45,8 @@ from toy_ff_generator.utils import (
 )
 from toy_ff_generator.validation import (
     validate_component_row_count,
+    validate_firm_characteristics_df,
+    validate_latent_state_df,
     validate_panel_row_count,
     validate_simulation_inputs,
 )
@@ -49,23 +55,22 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 STATE_ORDER = (-1, 0, 1)
 
 
-def _default_per_stock_characteristic_params(n: int) -> dict[str, list[list[float]]]:
-    """建立預設的 per-stock 三維 characteristic 參數。"""
+def _default_per_stock_latent_state_params(n: int) -> dict[str, list[list[float]]]:
+    """建立預設的 per-stock latent characteristic state 參數。"""
 
     mu_i = np.column_stack(
         [
             np.linspace(0.08, 0.02, n),
             np.linspace(0.05, 0.01, n),
-            np.linspace(0.03, 0.005, n),
         ]
     ).tolist()
 
     return {
-        "Omega_i": [[0.55, 0.45, 0.35] for _ in range(n)],
+        "Omega_i": [[0.55, 0.45] for _ in range(n)],
         "mu_i": mu_i,
-        "Lambda_i": [[0.08, 0.03, -0.02] for _ in range(n)],
-        "sigma_C_i": [[0.35, 0.30, 0.25] for _ in range(n)],
-        "C0_i": [[0.00, 0.00, 0.00] for _ in range(n)],
+        "lambda_i": [[0.08, 0.03] for _ in range(n)],
+        "sigma_X_i": [[0.35, 0.30] for _ in range(n)],
+        "X0_i": [[0.00, 0.00] for _ in range(n)],
     }
 
 
@@ -83,6 +88,7 @@ def _default_per_stock_initial_prices(n: int) -> list[float]:
 
 def build_default_config() -> dict[str, Any]:
     """建立整個專案的預設參數字典。"""
+
     N = 5
     T = 10
     return {
@@ -126,24 +132,24 @@ def build_default_config() -> dict[str, Any]:
                 [0.00005, 0.00006, 0.00045],
             ],
         },
-        "characteristic_setup": {
-            "use_shared_characteristic_params": False,
+        "latent_characteristic_setup": {
+            "use_shared_latent_state_params": False,
             "shared_params": {
-                "Omega": [0.65, 0.50, 0.35],
-                "mu_C": [0.00, 0.03, -0.02],
-                "Lambda_C": [0.20, 0.05, -0.03],
-                "sigma_C": [0.45, 0.35, 0.25],
-                "C0": [0.00, 0.00, 0.00],
+                "Omega": [0.95, 0.9],
+                "mu_X": [0.0001, 0.00001],
+                "lambda_X": [0.05, 0.02],
+                "sigma_X": [0.05, 0.02],
+                "X0": [0.00, 0.00],
             },
-            "per_stock_params": _default_per_stock_characteristic_params(N),
+            "per_stock_params": _default_per_stock_latent_state_params(N),
         },
         "exposure_setup": {
-            "a_mkt": [0.40, -0.10, 0.20],
-            "a_smb": [0.15, 0.25, -0.05],
-            "a_hml": [-0.20, 0.10, 0.30],
+            "a_mkt": [0.03, 0.03],
+            "a_smb": [-0.712, 0.00],
+            "a_hml": [0.00, 0.834],
             "b_mkt": 1.00,
-            "b_smb": 0.10,
-            "b_hml": 0.05,
+            "b_smb": 0.03,
+            "b_hml": -0.465,
         },
         "alpha_setup": {
             "mu_alpha": 0.00,
@@ -225,7 +231,7 @@ def _apply_overrides(
         updated["simulation_setup"]["random_seed"] = seed
     if N is not None:
         updated["simulation_setup"]["N"] = N
-        updated["characteristic_setup"]["per_stock_params"] = _default_per_stock_characteristic_params(N)
+        updated["latent_characteristic_setup"]["per_stock_params"] = _default_per_stock_latent_state_params(N)
         updated["epsilon_setup"]["per_stock_sigma_epsilon_i"] = _default_per_stock_sigma_epsilon(N)
         updated["clipping_price_setup"]["per_stock_initial_price"] = _default_per_stock_initial_prices(N)
     if T is not None:
@@ -246,7 +252,6 @@ def run_simulation(
 ) -> dict[str, Any]:
     """執行完整模擬流程，並把輸出檔寫入磁碟。"""
 
-    # 1. set config
     config = _apply_overrides(
         config=build_default_config(),
         output_dir=output_dir,
@@ -259,7 +264,7 @@ def run_simulation(
     simulation_setup = config["simulation_setup"]
     market_state_setup = config["market_state_setup"]
     factor_vector_ar_setup = config["factor_vector_ar_setup"]
-    characteristic_setup = config["characteristic_setup"]
+    latent_characteristic_setup = config["latent_characteristic_setup"]
     exposure_setup = config["exposure_setup"]
     alpha_setup = config["alpha_setup"]
     epsilon_setup = config["epsilon_setup"]
@@ -277,20 +282,18 @@ def run_simulation(
     )
     config["market_state_setup"]["resolved_state_sequence"] = state_sequence
 
-    # 2. validate
     validate_simulation_inputs(
         N=simulation_setup["N"],
         T=simulation_setup["T"],
         market_state_setup={**market_state_setup, "state_sequence": state_sequence},
         factor_vector_ar_setup=factor_vector_ar_setup,
-        characteristic_setup=characteristic_setup,
+        latent_characteristic_setup=latent_characteristic_setup,
         exposure_setup=exposure_setup,
         alpha_setup=alpha_setup,
         epsilon_setup=epsilon_setup,
         clipping_price_setup=clipping_price_setup,
     )
 
-    # 3. generate factors
     factor_df = generate_factors(
         t_count=simulation_setup["T"],
         state_sequence=state_sequence,
@@ -306,27 +309,30 @@ def run_simulation(
         mu_bull=factor_vector_ar_setup.get("mu_bull"),
     )
 
-    # 4. generate characteristics
-    characteristic_df = generate_characteristics(
+    latent_state_df = generate_latent_characteristic_states(
         stock_ids=stock_ids,
         time_columns=time_columns,
         state_sequence=state_sequence,
-        use_shared_characteristic_params=characteristic_setup[
-            "use_shared_characteristic_params"
+        use_shared_latent_state_params=latent_characteristic_setup[
+            "use_shared_latent_state_params"
         ],
-        shared_params=characteristic_setup["shared_params"],
-        per_stock_params=characteristic_setup["per_stock_params"],
+        shared_params=latent_characteristic_setup["shared_params"],
+        per_stock_params=latent_characteristic_setup["per_stock_params"],
         rng=rng,
     )
-    validate_component_row_count(
-        name="characteristic_df",
-        df=characteristic_df,
+    validate_latent_state_df(
+        latent_state_df=latent_state_df,
         expected_rows=simulation_setup["N"] * simulation_setup["T"],
     )
 
-    # 5. generate exposures
+    firm_characteristics_df = state_to_firm_characteristics(latent_state_df=latent_state_df)
+    validate_firm_characteristics_df(
+        firm_characteristics_df=firm_characteristics_df,
+        expected_rows=simulation_setup["N"] * simulation_setup["T"],
+    )
+
     beta_df = generate_exposures(
-        characteristic_df=characteristic_df,
+        latent_state_df=latent_state_df,
         a_mkt=exposure_setup["a_mkt"],
         b_mkt=exposure_setup["b_mkt"],
         a_smb=exposure_setup["a_smb"],
@@ -340,7 +346,6 @@ def run_simulation(
         expected_rows=simulation_setup["N"] * simulation_setup["T"],
     )
 
-    # 6. generate alpha
     alpha_df = generate_alpha(
         stock_ids=stock_ids,
         mu_alpha=alpha_setup["mu_alpha"],
@@ -348,7 +353,6 @@ def run_simulation(
         rng=rng,
     )
 
-    # 7. generate noise
     epsilon_df = generate_noise(
         stock_ids=stock_ids,
         time_columns=time_columns,
@@ -363,9 +367,8 @@ def run_simulation(
         expected_rows=simulation_setup["N"] * simulation_setup["T"],
     )
 
-    # 8. generate returns
     panel_long_df = build_panel(
-        characteristic_df=characteristic_df,
+        firm_characteristics_df=firm_characteristics_df,
         beta_df=beta_df,
         alpha_df=alpha_df,
         epsilon_df=epsilon_df,
@@ -377,14 +380,12 @@ def run_simulation(
     )
     panel_long_df = compute_raw_returns(panel_long_df)
 
-    # 9. apply clipping
     panel_long_df = clip_returns(
         panel_df=panel_long_df,
         limit_down=clipping_price_setup["limit_down"],
         limit_up=clipping_price_setup["limit_up"],
     )
 
-    # 10. generate prices
     initial_prices = _build_initial_prices(
         stock_ids=stock_ids,
         clipping_price_setup=clipping_price_setup,
@@ -398,9 +399,8 @@ def run_simulation(
         [
             "stock_id",
             "t",
-            "C1",
-            "C2",
-            "C3",
+            "state",
+            *FIRM_CHARACTERISTIC_COLUMNS,
             "alpha",
             "beta_mkt",
             "beta_smb",
@@ -415,9 +415,9 @@ def run_simulation(
         ]
     ].copy()
 
-    # 11. save outputs
     output_paths = save_outputs(
         panel_long_df=panel_long_df,
+        firm_characteristics_df=firm_characteristics_df,
         output_dir=output_setup["output_dir"],
         time_columns=time_columns,
         metadata=config,
@@ -427,7 +427,8 @@ def run_simulation(
         "config": config,
         "state_sequence": state_sequence,
         "factor_df": factor_df,
-        "characteristic_df": characteristic_df,
+        "latent_state_df": latent_state_df,
+        "firm_characteristics_df": firm_characteristics_df,
         "beta_df": beta_df,
         "alpha_df": alpha_df,
         "epsilon_df": epsilon_df,

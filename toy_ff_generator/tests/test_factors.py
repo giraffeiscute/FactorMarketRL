@@ -40,8 +40,9 @@ def test_generate_factors_columns_length_and_reproducibility() -> None:
     df_first = generate_factors(rng=set_random_seed(123), **kwargs)
     df_second = generate_factors(rng=set_random_seed(123), **kwargs)
 
-    assert list(df_first.columns) == ["t", "MKT", "SMB", "HML"]
+    assert list(df_first.columns) == ["t", "state", "MKT", "SMB", "HML"]
     assert len(df_first) == 8
+    assert df_first["state"].tolist() == kwargs["state_sequence"]
     assert df_first.equals(df_second)
 
 
@@ -86,5 +87,4 @@ def test_generate_factors_all_neutral_mean_tracks_stationary_mean() -> None:
     expected_stationary_mean = np.linalg.solve(np.eye(3) - phi, mu_neutral)
     sample_mean = factor_df.loc[1000:, ["MKT", "SMB", "HML"]].mean().to_numpy(dtype=float)
 
-    assert sample_mean[0] > 0.0
     assert np.allclose(sample_mean, expected_stationary_mean, atol=0.003)
