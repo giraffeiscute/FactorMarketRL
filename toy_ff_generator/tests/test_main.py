@@ -4,7 +4,7 @@ import json
 
 import pandas as pd
 
-from toy_ff_generator.main import run_simulation
+from toy_ff_generator.main import build_default_config, run_simulation
 
 
 def test_main_pipeline_generates_required_outputs(tmp_path) -> None:
@@ -33,3 +33,18 @@ def test_main_pipeline_generates_required_outputs(tmp_path) -> None:
     assert metadata["market_state_setup"]["resolved_state_sequence"] == [1, 1, 1, 1, 1, 1]
     assert {"C1", "C2", "C3"}.issubset(panel_df.columns)
     assert result["panel_long_df"].shape[0] == 24
+
+
+def test_default_characteristic_mu_i_is_per_stock_descending_and_nonnegative() -> None:
+    config = build_default_config()
+    characteristic_setup = config["characteristic_setup"]
+    mu_i = characteristic_setup["per_stock_params"]["mu_i"]
+
+    assert characteristic_setup["use_shared_characteristic_params"] is False
+    assert mu_i == [
+        [0.08, 0.05, 0.03],
+        [0.065, 0.04, 0.02375],
+        [0.05, 0.03, 0.0175],
+        [0.035, 0.02, 0.01125],
+        [0.02, 0.01, 0.005],
+    ]

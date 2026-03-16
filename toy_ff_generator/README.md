@@ -38,7 +38,7 @@ $$
 並使用向量 AR(1)：
 
 $$
-X_t=\Phi X_{t-1}+\Delta S_t+u_t
+X_t=\Phi X_{t-1}+\mu_X(S_t)+u_t
 $$
 
 其中：
@@ -50,7 +50,7 @@ $$
 說明如下：
 
 - $\Phi$ 是 $3\times 3$ 矩陣
-- $\Delta$ 是長度為 3 的向量
+- $\mu_X(S_t)$ 是由 regime 決定的長度 3 mean vector
 - $S_t$ 是 scalar regime state，不是矩陣
 - $S_t$ 會影響因子系統的均值位移
 - regime 也會影響 factor innovation covariance
@@ -310,16 +310,18 @@ $$
 
 舊版逐因子獨立設定的
 
-- $\phi_k$
-- $\delta_k$
-- $\sigma_{X,k}$
-- $\rho_{X,k}$
+- $\Phi$
+- $\mu_X^{bear}$
+- $\mu_X^{neutral}$
+- $\mu_X^{bull}$
 
 已改成向量系統參數：
 
 - $X_0$
 - $\Phi$
-- $\Delta$
+- $\mu_X^{bear}$
+- $\mu_X^{neutral}$
+- $\mu_X^{bull}$
 - $\Sigma_X^{bear}$
 - $\Sigma_X^{neutral}$
 - $\Sigma_X^{bull}$
@@ -328,7 +330,7 @@ $$
 
 - $X_0$ 是長度 3 的初始向量
 - $\Phi$ 是 $3 \times 3$ matrix
-- $\Delta$ 是長度 3 向量
+- $\mu_X^{bear}, \mu_X^{neutral}, \mu_X^{bull}$ 是三組 regime-specific 長度 3 mean vector
 - 三個 covariance matrix 分別對應 bear / neutral / bull regime
 
 ## (E) 個股固定效果與噪音參數
@@ -357,7 +359,7 @@ $$
 另外價格會由 clipping 後的 return 遞推生成：
 
 $$
-P_{i,t}=P_{i,t-1}(1+r_{i,t})
+P_{i,t}=P_{i,t-1}(1+r_{i,t}^{obs})
 $$
 
 ## 中間產物
@@ -418,8 +420,6 @@ $$
 
 i 表示資產（或公司）索引， 
 
-j 表示公司特徵（characteristic）的索引  
-
 k 表示風險因子（factor）的索引，  對應 Fama–French 三因子：
 $
 (\mathrm{MKT},\ \mathrm{SMB},\ \mathrm{HML})
@@ -445,7 +445,7 @@ $$
 =
 \Phi \mathbf{X}_{t-1}
 +
-\Delta S_t
+\mu_X(S_t)
 +
 \mathbf{u}_t,
 \qquad
@@ -453,9 +453,26 @@ $$
 \qquad
 \left(
 \Phi \in \mathbb{R}^{3\times 3},\ 
-\Delta \in \mathbb{R}^{3\times 1},\ 
+\mu_X(S_t) \in \mathbb{R}^{3\times 1},\ 
 \mathbf{u}_t \in \mathbb{R}^{3\times 1},\ 
 \Sigma_X(S_t)\in\mathbb{R}^{3\times 3}
+\right)
+$$ 
+
+$$
+\mu_X(S_t)
+\in
+\left\{
+\mu_X^{\mathrm{bear}},
+\mu_X^{\mathrm{neutral}},
+\mu_X^{\mathrm{bull}}
+\right\}
+\qquad
+\left(
+\mu_X^{\mathrm{bear}},
+\mu_X^{\mathrm{neutral}},
+\mu_X^{\mathrm{bull}}
+\in \mathbb{R}^{3\times 1}
 \right)
 $$
 
@@ -476,43 +493,61 @@ $$
 \right)
 $$
 
+
 $$
 \mathbf{C}_{i,t}
-:=
-\left\{
-C_{i,t}^{(1)},
-C_{i,t}^{(2)},
-C_{i,t}^{(3)}
-\right\}
-\qquad
-\left(
-C_{i,t}^{(j)} \in \mathbb{R}
-\right)
-$$
-
-$$
-C_{i,t}^{(j)}
 =
-\omega_i^{(j)} C_{i,t-1}^{(j)}
-+
-\mu_i^{(j)}
-+
-\lambda_i^{(j)} S_t
-+
-\xi_{i,t}^{(j)},
-\qquad j=1,2,3
+\begin{bmatrix}
+C_{i,t}^{(1)} \\
+C_{i,t}^{(2)} \\
+C_{i,t}^{(3)}
+\end{bmatrix}
 \qquad
 \left(
-\omega_i^{(j)},\mu_i^{(j)},\lambda_i^{(j)},\xi_{i,t}^{(j)},C_{i,t}^{(j)} \in \mathbb{R}
+\mathbf{C}_{i,t} \in \mathbb{R}^{3\times1}
 \right)
 $$
 
 $$
-\xi_{i,t}^{(j)}
-\sim
-\mathcal{N}\!\left(0,\,\left(\sigma_{C,i}^{(j)}\right)^2\right),
-\qquad j=1,2,3
+\mathbf{C}_{i,t}
+=
+\Omega_i \mathbf{C}_{i,t-1}
++
+\boldsymbol{\mu}_i
++
+\boldsymbol{\lambda}_i S_t
++
+\boldsymbol{\xi}_{i,t}
+$$
 
+$$
+\left(
+\Omega_i \in \mathbb{R}^{3\times3},\;
+\boldsymbol{\mu}_i \in \mathbb{R}^{3\times1},\;
+\boldsymbol{\lambda}_i \in \mathbb{R}^{3\times1},\;
+\boldsymbol{\xi}_{i,t} \in \mathbb{R}^{3\times1}
+\right)
+$$
+
+$$
+\boldsymbol{\xi}_{i,t}
+\sim
+\mathcal{N}
+\left(
+\mathbf{0},
+\Sigma_{C,i}
+\right)
+$$
+
+$$
+\Omega_i
+=
+\operatorname{diag}
+\left(
+\omega_i^{(1)},
+\omega_i^{(2)},
+\omega_i^{(3)}
+\right)
 $$
 
 $$
@@ -526,7 +561,7 @@ $$
 \right)
 \qquad
 \left(
-\Sigma_{C,i}\in\mathbb{R}^{3\times 3}
+\Sigma_{C,i}\in\mathbb{R}^{3\times3}
 \right)
 $$
 
@@ -535,11 +570,14 @@ $$
 =
 b_k
 +
-\sum_{j=1}^{3} a_{k,j} C_{i,t}^{(j)},
-\qquad k=1,2,3
+\mathbf{a}_k^\top
+\mathbf{C}_{i,t},
+\qquad
+k=1,2,3
 \qquad
 \left(
-\beta_{i,t,k},\, b_k,\, a_{k,j},\, C_{i,t}^{(j)} \in \mathbb{R}
+\mathbf{a}_k \in \mathbb{R}^{3\times1},\;
+\beta_{i,t,k},\, b_k \in \mathbb{R}
 \right)
 $$
 

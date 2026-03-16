@@ -52,9 +52,17 @@ STATE_ORDER = (-1, 0, 1)
 def _default_per_stock_characteristic_params(n: int) -> dict[str, list[list[float]]]:
     """建立預設的 per-stock 三維 characteristic 參數。"""
 
+    mu_i = np.column_stack(
+        [
+            np.linspace(0.08, 0.02, n),
+            np.linspace(0.05, 0.01, n),
+            np.linspace(0.03, 0.005, n),
+        ]
+    ).tolist()
+
     return {
         "Omega_i": [[0.55, 0.45, 0.35] for _ in range(n)],
-        "mu_i": [[-0.05, 0.00, 0.04] for _ in range(n)],
+        "mu_i": mu_i,
         "Lambda_i": [[0.08, 0.03, -0.02] for _ in range(n)],
         "sigma_C_i": [[0.35, 0.30, 0.25] for _ in range(n)],
         "C0_i": [[0.00, 0.00, 0.00] for _ in range(n)],
@@ -75,50 +83,51 @@ def _default_per_stock_initial_prices(n: int) -> list[float]:
 
 def build_default_config() -> dict[str, Any]:
     """建立整個專案的預設參數字典。"""
-
     N = 5
-
+    T = 10
     return {
         "simulation_setup": {
             "N": N,
-            "T": 10,
-            "random_seed": 424,
+            "T": T,
+            "random_seed": 42,
         },
         "market_state_setup": {
             "state_sequence": None,
-            "initial_state": 0,
+            "initial_state": -1,
             "transition_matrix": [
-                [0.80, 0.15, 0.05],
-                [0.10, 0.80, 0.10],
-                [0.05, 0.15, 0.80],
+                [1, 0, 0],
+                [0, 1, 0],
+                [0, 0, 1],
             ],
         },
         "factor_vector_ar_setup": {
-            "X0": [0.0, 0.0, 0.0],
+            "X0": [0.001, 0.0, 0.0],
             "Phi": [
-                [0.45, 0.05, 0.02],
+                [0.6, 0.05, 0.02],
                 [0.04, 0.30, 0.03],
                 [0.02, 0.04, 0.25],
             ],
-            "Delta": [0.015, 0.004, 0.003],
+            "mu_bear": [-0.025, -0.003, 0.001],
+            "mu_neutral": [0.0003, 0.0, 0.0],
+            "mu_bull": [0.008, 0.002, -0.001],
             "Sigma_X_bear": [
-                [0.0016, 0.00030, 0.00020],
-                [0.00030, 0.00090, 0.00015],
-                [0.00020, 0.00015, 0.00070],
+                [0.0040, 0.00035, 0.00020],
+                [0.00035, 0.00100, 0.00018],
+                [0.00020, 0.00018, 0.00080],
             ],
             "Sigma_X_neutral": [
-                [0.0012, 0.00020, 0.00010],
-                [0.00020, 0.00070, 0.00010],
-                [0.00010, 0.00010, 0.00060],
+                [0.0012, 0.00015, 0.00008],
+                [0.00015, 0.00065, 0.00010],
+                [0.00008, 0.00010, 0.00055],
             ],
             "Sigma_X_bull": [
-                [0.0010, 0.00025, 0.00015],
-                [0.00025, 0.00060, 0.00012],
-                [0.00015, 0.00012, 0.00055],
+                [0.0009, 0.00018, 0.00005],
+                [0.00018, 0.00055, 0.00006],
+                [0.00005, 0.00006, 0.00045],
             ],
         },
         "characteristic_setup": {
-            "use_shared_characteristic_params": True,
+            "use_shared_characteristic_params": False,
             "shared_params": {
                 "Omega": [0.65, 0.50, 0.35],
                 "mu_C": [0.00, 0.03, -0.02],
@@ -287,11 +296,14 @@ def run_simulation(
         state_sequence=state_sequence,
         X0=factor_vector_ar_setup["X0"],
         Phi=factor_vector_ar_setup["Phi"],
-        Delta=factor_vector_ar_setup["Delta"],
+        Delta=factor_vector_ar_setup.get("Delta"),
         Sigma_X_bear=factor_vector_ar_setup["Sigma_X_bear"],
         Sigma_X_neutral=factor_vector_ar_setup["Sigma_X_neutral"],
         Sigma_X_bull=factor_vector_ar_setup["Sigma_X_bull"],
         rng=rng,
+        mu_bear=factor_vector_ar_setup.get("mu_bear"),
+        mu_neutral=factor_vector_ar_setup.get("mu_neutral"),
+        mu_bull=factor_vector_ar_setup.get("mu_bull"),
     )
 
     # 4. generate characteristics

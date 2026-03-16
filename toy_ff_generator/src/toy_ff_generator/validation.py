@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import warnings
 from typing import Mapping, Sequence
 
 import numpy as np
@@ -92,15 +93,50 @@ def validate_factor_setup(factor_vector_ar_setup: Mapping[str, object]) -> None:
     """檢查 3 維向量 AR(1) 因子參數。"""
 
     phi = _coerce_array(factor_vector_ar_setup["Phi"], "Phi")
-    delta = _coerce_array(factor_vector_ar_setup["Delta"], "Delta")
     x0 = _coerce_array(factor_vector_ar_setup["X0"], "X0")
+    mu_bear = factor_vector_ar_setup.get("mu_bear")
+    mu_neutral = factor_vector_ar_setup.get("mu_neutral")
+    mu_bull = factor_vector_ar_setup.get("mu_bull")
 
     if phi.shape != (3, 3):
         raise ValueError(f"Phi must have shape (3, 3). Received {phi.shape}.")
-    if delta.shape != (3,):
-        raise ValueError(f"Delta must have shape (3,). Received {delta.shape}.")
     if x0.shape != (3,):
         raise ValueError(f"X0 must have shape (3,). Received {x0.shape}.")
+
+    has_explicit_means = any(value is not None for value in (mu_bear, mu_neutral, mu_bull))
+    if has_explicit_means:
+        if None in (mu_bear, mu_neutral, mu_bull):
+            raise ValueError(
+                "mu_bear, mu_neutral, and mu_bull must all be provided together."
+            )
+        for name, value in (
+            ("mu_bear", mu_bear),
+            ("mu_neutral", mu_neutral),
+            ("mu_bull", mu_bull),
+        ):
+            vector = _coerce_array(value, name)
+            if vector.shape != (3,):
+                raise ValueError(f"{name} must have shape (3,). Received {vector.shape}.")
+        if factor_vector_ar_setup.get("Delta") is not None:
+            warnings.warn(
+                "Delta is deprecated and ignored when mu_bear/mu_neutral/mu_bull are provided.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+    else:
+        delta = factor_vector_ar_setup.get("Delta")
+        if delta is None:
+            raise ValueError(
+                "factor_vector_ar_setup must provide either mu_bear/mu_neutral/mu_bull or deprecated Delta."
+            )
+        delta_vector = _coerce_array(delta, "Delta")
+        if delta_vector.shape != (3,):
+            raise ValueError(f"Delta must have shape (3,). Received {delta_vector.shape}.")
+        warnings.warn(
+            "Delta is deprecated. Use mu_bear/mu_neutral/mu_bull instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
 
     _validate_covariance_matrix("Sigma_X_bear", factor_vector_ar_setup["Sigma_X_bear"], (3, 3))
     _validate_covariance_matrix(
@@ -169,6 +205,8 @@ def validate_characteristic_setup(
         raise ValueError(f"sigma_C_i must have shape (N, 3). Received {sigma.shape}.")
     if c0.shape != (N, 3):
         raise ValueError(f"C0_i must have shape (N, 3). Received {c0.shape}.")
+    if np.any(mu < 0):
+        raise ValueError("Every component of mu_i must be >= 0.")
     if np.any(sigma <= 0):
         raise ValueError("Every component of sigma_C_i must be > 0.")
     if np.any(np.abs(omega) >= 1.0):
