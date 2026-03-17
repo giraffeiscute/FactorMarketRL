@@ -2,7 +2,7 @@
 
 import pandas as pd
 
-from toy_ff_generator.returns import clip_returns, compute_raw_returns, generate_prices
+from toy_ff_generator.returns import build_panel, clip_returns, compute_raw_returns, generate_prices
 
 
 def test_returns_pipeline_small_manual_example() -> None:
@@ -38,3 +38,54 @@ def test_returns_pipeline_small_manual_example() -> None:
     assert raw_df["raw_return"].round(10).tolist() == expected_raw
     assert clipped_df["return"].round(10).tolist() == expected_clipped
     assert price_df["price"].round(10).tolist() == expected_prices
+
+
+def test_build_panel_uses_next_period_factor_and_epsilon_realizations() -> None:
+    firm_characteristics_df = pd.DataFrame(
+        {
+            "stock_id": ["stock_000", "stock_000"],
+            "t": ["t_0", "t_1"],
+            "firm_size": [1.0, 1.1],
+            "book_to_price": [0.8, 0.9],
+        }
+    )
+    beta_df = pd.DataFrame(
+        {
+            "stock_id": ["stock_000", "stock_000"],
+            "t": ["t_0", "t_1"],
+            "beta_mkt": [1.0, 2.0],
+            "beta_smb": [0.0, 0.0],
+            "beta_hml": [0.0, 0.0],
+        }
+    )
+    alpha_df = pd.DataFrame({"stock_id": ["stock_000"], "alpha": [0.0]})
+    epsilon_df = pd.DataFrame(
+        {
+            "stock_id": ["stock_000", "stock_000", "stock_000"],
+            "t": ["t_0", "t_1", "t_2"],
+            "epsilon": [0.1, 0.2, 0.3],
+        }
+    )
+    factor_df = pd.DataFrame(
+        {
+            "t": ["t_0", "t_1", "t_2"],
+            "state": [-1, 0, 1],
+            "MKT": [1.0, 10.0, 100.0],
+            "SMB": [2.0, 20.0, 200.0],
+            "HML": [3.0, 30.0, 300.0],
+        }
+    )
+
+    panel_df = build_panel(
+        firm_characteristics_df=firm_characteristics_df,
+        beta_df=beta_df,
+        alpha_df=alpha_df,
+        epsilon_df=epsilon_df,
+        factor_df=factor_df,
+    ).sort_values("t")
+
+    assert panel_df["state"].tolist() == [-1, 0]
+    assert panel_df["MKT"].tolist() == [10.0, 100.0]
+    assert panel_df["SMB"].tolist() == [20.0, 200.0]
+    assert panel_df["HML"].tolist() == [30.0, 300.0]
+    assert panel_df["epsilon"].tolist() == [0.2, 0.3]

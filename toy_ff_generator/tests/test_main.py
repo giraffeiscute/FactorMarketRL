@@ -33,16 +33,21 @@ def test_main_pipeline_generates_required_outputs(tmp_path) -> None:
     assert metadata["simulation_setup"]["N"] == 4
     assert metadata["simulation_setup"]["T"] == 6
     assert metadata["market_state_setup"]["resolved_state_sequence"] == [1, 1, 1, 1, 1, 1]
+    assert metadata["market_state_setup"]["resolved_reward_state_sequence"] == [1, 1, 1, 1, 1, 1, 1]
     assert "state" in panel_df.columns
     assert panel_df["state"].tolist() == [1] * 24
     assert {"firm_size", "book_to_price"}.issubset(panel_df.columns)
     assert {"latent_size_state", "latent_book_to_price_state"}.isdisjoint(panel_df.columns)
     assert np.all(panel_df[["firm_size", "book_to_price"]].to_numpy(dtype=float) > 0.0)
     assert result["panel_long_df"].shape[0] == 24
-    assert result["factor_df"]["state"].tolist() == [1] * 6
+    assert result["factor_df"]["state"].tolist() == [1] * 7
+    assert len(result["epsilon_df"]) == 4 * 7
 
     latent_state_df = result["latent_state_df"].sort_values(["stock_id", "t"]).reset_index(drop=True)
     beta_df = result["beta_df"].sort_values(["stock_id", "t"]).reset_index(drop=True)
+    panel_long_df = result["panel_long_df"].sort_values(["stock_id", "t"]).reset_index(drop=True)
+    factor_df = result["factor_df"].sort_values("t").reset_index(drop=True)
+    epsilon_df = result["epsilon_df"].sort_values(["stock_id", "t"]).reset_index(drop=True)
     expected_beta_mkt = 1.0 + 0.03 * (
         latent_state_df["latent_size_state"] + latent_state_df["latent_book_to_price_state"]
     )
@@ -52,6 +57,17 @@ def test_main_pipeline_generates_required_outputs(tmp_path) -> None:
     assert np.allclose(beta_df["beta_mkt"], expected_beta_mkt)
     assert np.allclose(beta_df["beta_smb"], expected_beta_smb)
     assert np.allclose(beta_df["beta_hml"], expected_beta_hml)
+    expected_mkt = np.tile(factor_df["MKT"].iloc[1:].to_numpy(), 4)
+    expected_smb = np.tile(factor_df["SMB"].iloc[1:].to_numpy(), 4)
+    expected_hml = np.tile(factor_df["HML"].iloc[1:].to_numpy(), 4)
+    assert np.allclose(panel_long_df["MKT"], expected_mkt)
+    assert np.allclose(panel_long_df["SMB"], expected_smb)
+    assert np.allclose(panel_long_df["HML"], expected_hml)
+
+    expected_epsilon = (
+        epsilon_df.groupby("stock_id", sort=False)["epsilon"].shift(-1).dropna().to_numpy()
+    )
+    assert np.allclose(panel_long_df["epsilon"], expected_epsilon)
 
     excel_path = result["output_paths"]["excel_workbook"]
     assert excel_path is None or excel_path.exists()

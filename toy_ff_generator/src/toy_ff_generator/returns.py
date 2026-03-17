@@ -11,6 +11,41 @@ import pandas as pd
 from toy_ff_generator.characteristics import FIRM_CHARACTERISTIC_COLUMNS
 
 
+def _time_label_to_order(time_label: str) -> int:
+    """把標準時間標籤 `t_k` 轉成可排序的整數索引。"""
+
+    prefix, _, suffix = time_label.partition("_")
+    if prefix != "t" or not suffix.isdigit():
+        raise ValueError(
+            f"Time label must follow the `t_k` convention. Received {time_label!r}."
+        )
+    return int(suffix)
+
+
+def _align_next_period_factor_realizations(factor_df: pd.DataFrame) -> pd.DataFrame:
+    """保留當期 state，並把因子 realizations 對齊到下一期。"""
+
+    ordered_factor_df = factor_df.copy()
+    ordered_factor_df["_time_order"] = ordered_factor_df["t"].map(_time_label_to_order)
+    ordered_factor_df = ordered_factor_df.sort_values("_time_order").reset_index(drop=True)
+    ordered_factor_df[["MKT", "SMB", "HML"]] = ordered_factor_df[["MKT", "SMB", "HML"]].shift(-1)
+
+    return ordered_factor_df.iloc[:-1][["t", "state", "MKT", "SMB", "HML"]].copy()
+
+
+def _align_next_period_epsilon_realizations(epsilon_df: pd.DataFrame) -> pd.DataFrame:
+    """把 idiosyncratic noise 對齊到下一期 realizations。"""
+
+    ordered_epsilon_df = epsilon_df.copy()
+    ordered_epsilon_df["_time_order"] = ordered_epsilon_df["t"].map(_time_label_to_order)
+    ordered_epsilon_df = ordered_epsilon_df.sort_values(["stock_id", "_time_order"]).copy()
+    ordered_epsilon_df["epsilon"] = ordered_epsilon_df.groupby("stock_id", sort=False)[
+        "epsilon"
+    ].shift(-1)
+
+    return ordered_epsilon_df.dropna(subset=["epsilon"])[["stock_id", "t", "epsilon"]].copy()
+
+
 def build_panel(
     firm_characteristics_df: pd.DataFrame,
     beta_df: pd.DataFrame,
@@ -18,7 +53,7 @@ def build_panel(
     epsilon_df: pd.DataFrame,
     factor_df: pd.DataFrame,
 ) -> pd.DataFrame:
-    """把各個生成模組的輸出合併成 long panel，包含每期市場 state。"""
+    """把各個生成模組的輸出合併成 long panel，使用 t 的 beta 對應 t+1 的 realizations。"""
 
     missing_columns = [
         column_name
@@ -31,10 +66,13 @@ def build_panel(
             f"{missing_columns}. Expected {FIRM_CHARACTERISTIC_COLUMNS}."
         )
 
+    next_factor_df = _align_next_period_factor_realizations(factor_df=factor_df)
+    next_epsilon_df = _align_next_period_epsilon_realizations(epsilon_df=epsilon_df)
+
     panel_df = firm_characteristics_df.merge(beta_df, on=["stock_id", "t"], how="inner")
     panel_df = panel_df.merge(alpha_df, on="stock_id", how="inner")
-    panel_df = panel_df.merge(epsilon_df, on=["stock_id", "t"], how="inner")
-    panel_df = panel_df.merge(factor_df, on="t", how="inner")
+    panel_df = panel_df.merge(next_epsilon_df, on=["stock_id", "t"], how="inner")
+    panel_df = panel_df.merge(next_factor_df, on="t", how="inner")
 
     return panel_df[
         [
@@ -55,7 +93,7 @@ def build_panel(
 
 
 def compute_raw_returns(panel_df: pd.DataFrame) -> pd.DataFrame:
-    """依照模型方程式計算 clipping 之前的 `raw_return`。"""
+    """依照 r_{i,t+1}=alpha_i+beta_{i,t}'X_{t+1}+epsilon_{i,t+1} 計算 `raw_return`。"""
 
     result_df = panel_df.copy()
     result_df["raw_return"] = (

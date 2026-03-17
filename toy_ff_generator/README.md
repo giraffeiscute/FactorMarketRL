@@ -211,7 +211,7 @@ $$
 另外生成 idiosyncratic noise：
 
 $$
-\varepsilon_{i,t}\sim N(0,\sigma_{\varepsilon,i}^2)
+\varepsilon_{i,t+1}\sim N(0,\sigma_{\varepsilon,i}^2)
 $$
 
 其中 epsilon 目前支援：
@@ -223,26 +223,31 @@ $$
 
 ## Step 6：生成個股報酬
 
-本版維持當期對齊（contemporaneous alignment）：
+本版改成下一期報酬對齊（next-period reward alignment），使其符合 RL 的標準時序：
+
+- agent 在 $t$ 時點觀察 state / observation
+- agent 在 $t$ 時點選 action
+- 環境從 $t$ 演化到 $t+1$
+- reward 在 $t+1$ 實現
 
 $$
-r_{i,t}=\alpha_i+\beta_{i,t,1}MKT_t+\beta_{i,t,2}SMB_t+\beta_{i,t,3}HML_t+\varepsilon_{i,t}
+r_{i,t+1}=\alpha_i+\beta_{i,t,1}MKT_{t+1}+\beta_{i,t,2}SMB_{t+1}+\beta_{i,t,3}HML_{t+1}+\varepsilon_{i,t+1}
 $$
 
 也就是：
 
-- factor 的 $t$ 使用 $X_t$
-- characteristic 的 $t$ 使用 $C_{i,t}$
+- factor return 的實現期使用 $X_{t+1}$
+- characteristic 的決定期使用 $C_{i,t}$
 - beta 的 $t$ 使用 $\beta_{i,t}$
-- epsilon 的 $t$ 使用 $\varepsilon_{i,t}$
+- epsilon 的實現期使用 $\varepsilon_{i,t+1}$
 
-這次更新只改：
+這次時間索引調整只改：
 
-- factor dynamics
-- characteristic dynamics
-- beta 由單一 scalar characteristic 改成 characteristic vector 的線性映射
+- return / reward 的實現期
+- 與 return 對齊的 factor realization index
+- 與 return 對齊的 epsilon、clipping 與價格遞推索引
 
-目前不引入 return lag 結構。
+其餘模型結構維持不變，尤其不改動 $\beta_{i,t,k}=b_k+\mathbf{a}_k^\top \mathbf{Z}_{i,t}$ 的定義。
 
 在報酬生成後，程式還會進一步：
 
@@ -355,7 +360,7 @@ $$
 股票報酬資料為：
 
 $$
-\{r_{i,t}\}_{i=1,\ldots,N;\;t=1,\ldots,T}
+\{r_{i,t+1}\}_{i=1,\ldots,N;\;t=0,\ldots,T-1}
 $$
 
 並整理成 $N\times T$ 的 wide format。
@@ -363,7 +368,7 @@ $$
 另外價格會由 clipping 後的 return 遞推生成：
 
 $$
-P_{i,t}=P_{i,t-1}(1+r_{i,t}^{obs})
+P_{i,t+1}=P_{i,t}(1+r_{i,t+1}^{obs})
 $$
 
 ## 中間產物
@@ -403,7 +408,7 @@ $$
 - 個股噪音
 
 $$
-\{\varepsilon_{i,t}\}
+\{\varepsilon_{i,t+1}\}_{i=1,\ldots,N;\;t=0,\ldots,T-1}
 $$
 
 對應資料表欄位格式為：
@@ -620,29 +625,29 @@ k=1,2,3
 $$
 
 $$
-r_{i,t}
+r_{i,t+1}
 =
 \alpha_i
 +
-\beta_{i,t,1}\mathrm{MKT}_t
+\beta_{i,t,1}\mathrm{MKT}_{t+1}
 +
-\beta_{i,t,2}\mathrm{SMB}_t
+\beta_{i,t,2}\mathrm{SMB}_{t+1}
 +
-\beta_{i,t,3}\mathrm{HML}_t
+\beta_{i,t,3}\mathrm{HML}_{t+1}
 +
-\varepsilon_{i,t}
+\varepsilon_{i,t+1}
 $$
 
 $$
-r_{i,t}^{obs}
+r_{i,t+1}^{obs}
 =
-\operatorname{clip}(r_{i,t},\text{limit\_down},\text{limit\_up})
+\operatorname{clip}(r_{i,t+1},\text{limit\_down},\text{limit\_up})
 $$
 
 $$
-P_{i,t}
+P_{i,t+1}
 =
-P_{i,t-1}(1+r_{i,t}^{obs})
+P_{i,t}(1+r_{i,t+1}^{obs})
 $$
 
 註記: Book to Price Ratio = (總資產 - 總負債) / 流通股數

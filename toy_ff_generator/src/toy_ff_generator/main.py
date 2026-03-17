@@ -196,6 +196,23 @@ def _build_state_sequence(
     return state_sequence
 
 
+def _extend_state_sequence_for_next_period(
+    state_sequence: list[int],
+    market_state_setup: Mapping[str, Any],
+    rng: np.random.Generator,
+) -> list[int]:
+    """在決策期 state path 後補上一個 t+1 state，供 next-period reward 使用。"""
+
+    if market_state_setup.get("state_sequence") is not None:
+        return [*state_sequence, int(state_sequence[-1])]
+
+    transition_matrix = np.asarray(market_state_setup["transition_matrix"], dtype=float)
+    current_state = int(state_sequence[-1])
+    current_index = STATE_ORDER.index(current_state)
+    next_state = int(rng.choice(STATE_ORDER, p=transition_matrix[current_index]))
+    return [*state_sequence, next_state]
+
+
 def _build_initial_prices(
     stock_ids: list[str],
     clipping_price_setup: Mapping[str, Any],
@@ -273,6 +290,7 @@ def run_simulation(
 
     stock_ids = make_stock_ids(simulation_setup["N"])
     time_columns = make_time_columns(simulation_setup["T"])
+    reward_time_columns = make_time_columns(simulation_setup["T"] + 1)
     rng = set_random_seed(simulation_setup["random_seed"])
 
     state_sequence = _build_state_sequence(
@@ -280,7 +298,13 @@ def run_simulation(
         market_state_setup=market_state_setup,
         rng=rng,
     )
+    reward_state_sequence = _extend_state_sequence_for_next_period(
+        state_sequence=state_sequence,
+        market_state_setup=market_state_setup,
+        rng=rng,
+    )
     config["market_state_setup"]["resolved_state_sequence"] = state_sequence
+    config["market_state_setup"]["resolved_reward_state_sequence"] = reward_state_sequence
 
     validate_simulation_inputs(
         N=simulation_setup["N"],
@@ -295,8 +319,8 @@ def run_simulation(
     )
 
     factor_df = generate_factors(
-        t_count=simulation_setup["T"],
-        state_sequence=state_sequence,
+        t_count=simulation_setup["T"] + 1,
+        state_sequence=reward_state_sequence,
         X0=factor_vector_ar_setup["X0"],
         Phi=factor_vector_ar_setup["Phi"],
         Delta=factor_vector_ar_setup.get("Delta"),
@@ -355,7 +379,7 @@ def run_simulation(
 
     epsilon_df = generate_noise(
         stock_ids=stock_ids,
-        time_columns=time_columns,
+        time_columns=reward_time_columns,
         use_shared_sigma_epsilon=epsilon_setup["use_shared_sigma_epsilon"],
         shared_sigma_epsilon=epsilon_setup["shared_sigma_epsilon"],
         per_stock_sigma_epsilon_i=epsilon_setup["per_stock_sigma_epsilon_i"],
@@ -364,7 +388,7 @@ def run_simulation(
     validate_component_row_count(
         name="epsilon_df",
         df=epsilon_df,
-        expected_rows=simulation_setup["N"] * simulation_setup["T"],
+        expected_rows=simulation_setup["N"] * (simulation_setup["T"] + 1),
     )
 
     panel_long_df = build_panel(
