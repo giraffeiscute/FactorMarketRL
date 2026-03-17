@@ -6,7 +6,7 @@
   },
   "market_state_setup": {
     "state_sequence": null,
-    "initial_state": -1,
+    "initial_state": 0,
     "transition_matrix": [
       [
         1,
@@ -25,16 +25,16 @@
       ]
     ],
     "resolved_state_sequence": [
-      -1,
-      -1,
-      -1,
-      -1,
-      -1,
-      -1,
-      -1,
-      -1,
-      -1,
-      -1
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
     ]
   },
   "factor_vector_ar_setup": {
@@ -51,7 +51,7 @@
       ],
       [
         0.04,
-        0.3,
+        0.55,
         0.03
       ],
       [
@@ -71,9 +71,9 @@
       0.0
     ],
     "mu_bull": [
-      0.008,
-      0.002,
-      -0.001
+      0.005,
+      0.01,
+      -0.01
     ],
     "Sigma_X_bear": [
       [
@@ -83,7 +83,7 @@
       ],
       [
         0.00035,
-        0.001,
+        0.004,
         0.00018
       ],
       [
@@ -283,7 +283,7 @@
   },
   "alpha_setup": {
     "mu_alpha": 0.0,
-    "sigma_alpha": 0.015
+    "sigma_alpha": 0.005
   },
   "epsilon_setup": {
     "use_shared_sigma_epsilon": true,

@@ -645,7 +645,7 @@ P_{i,t}
 P_{i,t-1}(1+r_{i,t}^{obs})
 $$
 
-註記: Book to Price Ratio = (總資產 - 總負債) / 流通股數
+註記: 帳面市值比 Book to Price Ratio = 帳面股東權益/市值
 
 ## 安裝
 

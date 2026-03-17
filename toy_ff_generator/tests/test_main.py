@@ -12,22 +12,18 @@ from toy_ff_generator.utils import build_firm_characteristics_excel_view
 def test_main_pipeline_generates_required_outputs(tmp_path) -> None:
     result = run_simulation(output_dir=str(tmp_path), seed=11, N=4, T=6, S=1)
 
-    returns_path = tmp_path / "returns.csv"
-    prices_path = tmp_path / "prices.csv"
-    panel_path = tmp_path / "panel_long.csv"
-    metadata_path = tmp_path / "metadata.json"
+    prices_path = tmp_path / "bull_4_6_price.csv"
+    panel_path = tmp_path / "bull_4_6_panel_long.csv"
+    metadata_path = tmp_path / "bull_4_6_metadata.json"
 
-    assert returns_path.exists()
     assert prices_path.exists()
     assert panel_path.exists()
     assert metadata_path.exists()
 
-    returns_df = pd.read_csv(returns_path, index_col=0)
     prices_df = pd.read_csv(prices_path, index_col=0)
     panel_df = pd.read_csv(panel_path)
     metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
 
-    assert returns_df.shape == (4, 6)
     assert prices_df.shape == (4, 6)
     assert len(panel_df) == 24
     assert metadata["simulation_setup"]["N"] == 4
