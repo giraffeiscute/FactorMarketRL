@@ -91,7 +91,7 @@ def build_default_config() -> dict[str, Any]:
             "use_shared_latent_state_params": False,
             "shared_params": {
                 "Omega": [0.95, 0.9],
-                "mu_X": [0.0001, 0.00001],
+                "mu_X": [0, 0],
                 "lambda_X": [0.05, 0.02],
                 "sigma_X": [0.05, 0.02],
                 "X0": [0.00, 0.00],
