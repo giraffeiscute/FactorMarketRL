@@ -4,6 +4,7 @@ import pandas as pd
 import pytest
 
 from toy_ff_generator.validation import (
+    validate_alpha_epsilon_mode_setup,
     validate_exposure_setup,
     validate_firm_characteristics_df,
     validate_latent_characteristic_setup,
@@ -81,4 +82,27 @@ def test_validate_firm_characteristics_df_requires_positive_observable_values() 
                 }
             ),
             expected_rows=1,
+        )
+
+
+def test_validate_alpha_epsilon_mode_setup_rejects_unknown_group() -> None:
+    with pytest.raises(
+        ValueError,
+        match=r"alpha_group must be one of",
+    ):
+        validate_alpha_epsilon_mode_setup(
+            {
+                "alpha_group": "ultra",
+                "epsilon_group": "low",
+                "alpha_levels": {
+                    "low": 0.001,
+                    "mid": 0.002,
+                    "high": 0.003,
+                },
+                "epsilon_levels": {
+                    "low": 0.01,
+                    "mid": 0.02,
+                    "high": 0.03,
+                },
+            }
         )

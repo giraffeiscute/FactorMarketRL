@@ -1,7 +1,3 @@
-"""
-這個模組負責檢查主模擬流程的輸入參數是否合法。
-"""
-
 from __future__ import annotations
 
 import warnings
@@ -17,6 +13,7 @@ from toy_ff_generator.characteristics import (
 )
 
 STATE_VALUES = (-1, 0, 1)
+ALPHA_EPSILON_GROUPS = ("low", "mid", "high")
 
 
 def _latent_state_shape_message(expected_shape: tuple[int, ...]) -> str:
@@ -34,15 +31,11 @@ def _observable_characteristic_shape_message(expected_shape: tuple[int, ...]) ->
 
 
 def _validate_positive(name: str, value: float) -> None:
-    """檢查數值是否嚴格大於 0。"""
-
     if value <= 0:
         raise ValueError(f"{name} must be > 0. Received {value}.")
 
 
 def _validate_state_values(state_values: Sequence[int], name: str) -> None:
-    """檢查 state sequence 是否只包含 -1、0、1。"""
-
     invalid_values = sorted(set(int(value) for value in state_values) - set(STATE_VALUES))
     if invalid_values:
         raise ValueError(
@@ -51,11 +44,9 @@ def _validate_state_values(state_values: Sequence[int], name: str) -> None:
 
 
 def _coerce_array(values: Sequence[float] | Sequence[Sequence[float]], name: str) -> np.ndarray:
-    """把輸入值轉成 NumPy array。"""
-
     try:
         return np.asarray(values, dtype=float)
-    except Exception as exc:  # pragma: no cover - defensive
+    except Exception as exc:  # pragma: no cover
         raise ValueError(f"{name} could not be converted to a numeric array.") from exc
 
 
@@ -82,9 +73,11 @@ def _validate_observable_array_shape(
         )
 
 
-def _validate_covariance_matrix(name: str, matrix: Sequence[Sequence[float]], shape: tuple[int, int]) -> None:
-    """檢查 covariance matrix 的 shape、對稱性與半正定性。"""
-
+def _validate_covariance_matrix(
+    name: str,
+    matrix: Sequence[Sequence[float]],
+    shape: tuple[int, int],
+) -> None:
     array = _coerce_array(matrix, name)
     if array.shape != shape:
         raise ValueError(f"{name} must have shape {shape}. Received {array.shape}.")
@@ -102,8 +95,6 @@ def validate_market_state_setup(
     T: int,
     market_state_setup: Mapping[str, object],
 ) -> None:
-    """檢查 state sequence 或 Markov transition matrix。"""
-
     state_sequence = market_state_setup.get("state_sequence")
     if state_sequence is not None:
         if len(state_sequence) != T:
@@ -133,8 +124,6 @@ def validate_market_state_setup(
 
 
 def validate_factor_setup(factor_vector_ar_setup: Mapping[str, object]) -> None:
-    """檢查 3 維向量 AR(1) 因子參數。"""
-
     phi = _coerce_array(factor_vector_ar_setup["Phi"], "Phi")
     x0 = _coerce_array(factor_vector_ar_setup["X0"], "X0")
     mu_bear = factor_vector_ar_setup.get("mu_bear")
@@ -194,8 +183,6 @@ def validate_latent_characteristic_setup(
     N: int,
     latent_characteristic_setup: Mapping[str, object],
 ) -> None:
-    """檢查二維 latent characteristic state 參數。"""
-
     use_shared = bool(latent_characteristic_setup["use_shared_latent_state_params"])
     if use_shared:
         shared_params = latent_characteristic_setup.get("shared_params")
@@ -246,8 +233,6 @@ def validate_latent_characteristic_setup(
 
 
 def validate_exposure_setup(exposure_setup: Mapping[str, object]) -> None:
-    """檢查 beta 對 latent state 的 loading vectors 與 scalar intercepts。"""
-
     for vector_name in ("a_mkt", "a_smb", "a_hml"):
         vector = _coerce_array(exposure_setup[vector_name], vector_name)
         _validate_latent_state_array_shape(vector_name, vector, (LATENT_STATE_DIM,))
@@ -262,8 +247,6 @@ def validate_latent_state_df(
     latent_state_df: pd.DataFrame,
     expected_rows: int,
 ) -> None:
-    """檢查 latent state dataframe 的欄位完整性與 shape。"""
-
     if len(latent_state_df) != expected_rows:
         raise ValueError(
             "latent_state_df row count does not match expectation. "
@@ -293,8 +276,6 @@ def validate_firm_characteristics_df(
     firm_characteristics_df: pd.DataFrame,
     expected_rows: int,
 ) -> None:
-    """檢查 observable firm characteristics 的 shape 與正值條件。"""
-
     if len(firm_characteristics_df) != expected_rows:
         raise ValueError(
             "firm_characteristics_df row count does not match expectation. "
@@ -325,35 +306,65 @@ def validate_firm_characteristics_df(
         )
 
 
-def validate_epsilon_setup(
-    N: int,
-    epsilon_setup: Mapping[str, object],
+def _validate_group_levels(
+    levels: Mapping[str, object],
+    *,
+    levels_name: str,
 ) -> None:
-    """檢查 epsilon 參數。"""
-
-    if bool(epsilon_setup["use_shared_sigma_epsilon"]):
-        _validate_positive("shared_sigma_epsilon", float(epsilon_setup["shared_sigma_epsilon"]))
-        return
-
-    per_stock_sigma = _coerce_array(
-        epsilon_setup["per_stock_sigma_epsilon_i"],
-        "per_stock_sigma_epsilon_i",
-    )
-    if per_stock_sigma.shape != (N,):
+    missing_groups = [
+        group_name for group_name in ALPHA_EPSILON_GROUPS if group_name not in levels
+    ]
+    if missing_groups:
         raise ValueError(
-            "per_stock_sigma_epsilon_i must have shape (N,). "
-            f"Received {per_stock_sigma.shape}."
+            f"{levels_name} must define {list(ALPHA_EPSILON_GROUPS)}. "
+            f"Missing groups: {missing_groups}."
         )
-    if np.any(per_stock_sigma <= 0):
-        raise ValueError("All per_stock_sigma_epsilon_i values must be > 0.")
+
+    for group_name in ALPHA_EPSILON_GROUPS:
+        scalar_value = np.asarray(levels[group_name], dtype=float)
+        if scalar_value.shape != ():
+            raise ValueError(
+                f"{levels_name}[{group_name!r}] must be a scalar. "
+                f"Received shape {scalar_value.shape}."
+            )
+
+
+def validate_alpha_epsilon_mode_setup(
+    alpha_epsilon_mode_setup: Mapping[str, object],
+) -> None:
+    alpha_group = str(alpha_epsilon_mode_setup["alpha_group"])
+    epsilon_group = str(alpha_epsilon_mode_setup["epsilon_group"])
+    alpha_levels = alpha_epsilon_mode_setup["alpha_levels"]
+    epsilon_levels = alpha_epsilon_mode_setup["epsilon_levels"]
+
+    if not isinstance(alpha_levels, Mapping):
+        raise ValueError("alpha_levels must be a mapping from group name to alpha value.")
+    if not isinstance(epsilon_levels, Mapping):
+        raise ValueError("epsilon_levels must be a mapping from group name to epsilon sigma.")
+
+    _validate_group_levels(alpha_levels, levels_name="alpha_levels")
+    _validate_group_levels(epsilon_levels, levels_name="epsilon_levels")
+
+    if alpha_group not in alpha_levels:
+        raise ValueError(
+            f"alpha_group must be one of {sorted(alpha_levels)}. Received {alpha_group!r}."
+        )
+    if epsilon_group not in epsilon_levels:
+        raise ValueError(
+            f"epsilon_group must be one of {sorted(epsilon_levels)}. Received {epsilon_group!r}."
+        )
+
+    for group_name in ALPHA_EPSILON_GROUPS:
+        _validate_positive(
+            f"epsilon_levels[{group_name!r}]",
+            float(epsilon_levels[group_name]),
+        )
 
 
 def validate_clipping_price_setup(
     N: int,
     clipping_price_setup: Mapping[str, object],
 ) -> None:
-    """檢查 clipping 與價格設定。"""
-
     limit_down = float(clipping_price_setup["limit_down"])
     limit_up = float(clipping_price_setup["limit_up"])
     if limit_down >= limit_up:
@@ -389,12 +400,9 @@ def validate_simulation_inputs(
     factor_vector_ar_setup: Mapping[str, object],
     latent_characteristic_setup: Mapping[str, object],
     exposure_setup: Mapping[str, object],
-    alpha_setup: Mapping[str, object],
-    epsilon_setup: Mapping[str, object],
+    alpha_epsilon_mode_setup: Mapping[str, object],
     clipping_price_setup: Mapping[str, object],
 ) -> None:
-    """檢查整個模擬流程的主要輸入參數。"""
-
     if N <= 0:
         raise ValueError(f"N must be > 0. Received {N}.")
     if T <= 0:
@@ -404,15 +412,11 @@ def validate_simulation_inputs(
     validate_factor_setup(factor_vector_ar_setup=factor_vector_ar_setup)
     validate_latent_characteristic_setup(N=N, latent_characteristic_setup=latent_characteristic_setup)
     validate_exposure_setup(exposure_setup=exposure_setup)
-
-    _validate_positive("sigma_alpha", float(alpha_setup["sigma_alpha"]))
-    validate_epsilon_setup(N=N, epsilon_setup=epsilon_setup)
+    validate_alpha_epsilon_mode_setup(alpha_epsilon_mode_setup=alpha_epsilon_mode_setup)
     validate_clipping_price_setup(N=N, clipping_price_setup=clipping_price_setup)
 
 
 def validate_component_row_count(name: str, df: pd.DataFrame, expected_rows: int) -> None:
-    """檢查中間資料表筆數是否符合預期。"""
-
     if len(df) != expected_rows:
         raise ValueError(
             f"{name} row count does not match expectation. "
@@ -421,8 +425,6 @@ def validate_component_row_count(name: str, df: pd.DataFrame, expected_rows: int
 
 
 def validate_panel_row_count(panel_df: pd.DataFrame, expected_rows: int) -> None:
-    """檢查 merge 後資料筆數是否符合預期。"""
-
     if len(panel_df) != expected_rows:
         raise ValueError(
             "Merged panel row count does not match expectation. "

@@ -29,11 +29,14 @@ def test_main_pipeline_generates_required_outputs(tmp_path) -> None:
     assert metadata["simulation_setup"]["N"] == 4
     assert metadata["simulation_setup"]["T"] == 6
     assert metadata["market_state_setup"]["resolved_state_sequence"] == [1, 1, 1, 1, 1, 1]
+    assert metadata["alpha_epsilon_mode_setup"]["alpha_group"] == "low"
+    assert metadata["alpha_epsilon_mode_setup"]["epsilon_group"] == "low"
     assert "state" in panel_df.columns
     assert panel_df["state"].tolist() == [1] * 24
     assert {"firm_size", "book_to_price"}.issubset(panel_df.columns)
     assert {"latent_size_state", "latent_book_to_price_state"}.isdisjoint(panel_df.columns)
     assert np.all(panel_df[["firm_size", "book_to_price"]].to_numpy(dtype=float) > 0.0)
+    assert np.allclose(panel_df["alpha"].to_numpy(dtype=float), 0.001)
     assert result["panel_long_df"].shape[0] == 24
     assert result["factor_df"]["state"].tolist() == [1] * 6
 
@@ -42,8 +45,8 @@ def test_main_pipeline_generates_required_outputs(tmp_path) -> None:
     expected_beta_mkt = 1.0 + 0.03 * (
         latent_state_df["latent_size_state"] + latent_state_df["latent_book_to_price_state"]
     )
-    expected_beta_smb = -latent_state_df["latent_size_state"]
-    expected_beta_hml = latent_state_df["latent_book_to_price_state"]
+    expected_beta_smb = 0.03 - 0.712 * latent_state_df["latent_size_state"]
+    expected_beta_hml = -0.465 + 0.834 * latent_state_df["latent_book_to_price_state"]
 
     assert np.allclose(beta_df["beta_mkt"], expected_beta_mkt)
     assert np.allclose(beta_df["beta_smb"], expected_beta_smb)

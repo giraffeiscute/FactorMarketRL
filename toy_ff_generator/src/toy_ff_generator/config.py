@@ -106,14 +106,19 @@ def build_default_config() -> dict[str, Any]:
             "b_smb": 0.03,
             "b_hml": -0.465,
         },
-        "alpha_setup": {
-            "mu_alpha": 0.00,
-            "sigma_alpha": 0.005,
-        },
-        "epsilon_setup": {
-            "use_shared_sigma_epsilon": True,
-            "shared_sigma_epsilon": 0.03,
-            "per_stock_sigma_epsilon_i": _default_per_stock_sigma_epsilon(N),
+        "alpha_epsilon_mode_setup": {
+            "alpha_group": "high",
+            "epsilon_group": "low",
+            "alpha_levels": {
+                "low": -0.01,
+                "mid": 0.002,
+                "high": 0.01,
+            },
+            "epsilon_levels": {
+                "low": 0.01,
+                "mid": 0.02,
+                "high": 0.03,
+            },
         },
         "clipping_price_setup": {
             "limit_up": 0.10,
