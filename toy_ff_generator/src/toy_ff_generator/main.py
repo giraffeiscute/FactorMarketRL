@@ -28,7 +28,7 @@ from toy_ff_generator.config import (
 )
 from toy_ff_generator.exposures import generate_exposures
 from toy_ff_generator.factors import generate_factors
-from toy_ff_generator.noise import generate_noise
+from toy_ff_generator.noise import generate_noise, resolve_epsilon_sigma
 from toy_ff_generator.returns import (
     build_panel,
     clip_returns,
@@ -85,6 +85,10 @@ def _build_initial_prices(
         stock_id: float(price)
         for stock_id, price in zip(stock_ids, per_stock_initial_price, strict=True)
     }
+
+
+def _format_mu_vector(mu_vector: list[float] | tuple[float, ...]) -> str:
+    return f"({float(mu_vector[0])},{float(mu_vector[1])},{float(mu_vector[2])})"
 
 
 def _format_state_for_filename(
@@ -315,13 +319,37 @@ def run_simulation(
         time_columns=time_columns,
     )
 
+    if latent_characteristic_setup["use_shared_latent_state_params"]:
+        shared_mu = latent_characteristic_setup["shared_params"]["mu_Z"]
+        mu_by_stock = {
+            stock_id: _format_mu_vector(shared_mu)
+            for stock_id in stock_ids
+        }
+    else:
+        mu_by_stock = {
+            stock_id: _format_mu_vector(mu_vector)
+            for stock_id, mu_vector in zip(
+                stock_ids,
+                latent_characteristic_setup["per_stock_params"]["mu_i"],
+                strict=True,
+            )
+        }
+    epsilon_variance = resolve_epsilon_sigma(
+        epsilon_group=alpha_epsilon_mode_setup["epsilon_group"],
+        epsilon_levels=alpha_epsilon_mode_setup["epsilon_levels"],
+    )
+    panel_long_df["mu"] = panel_long_df["stock_id"].map(mu_by_stock)
+    panel_long_df["epsilon_variance"] = epsilon_variance
+
     panel_long_df = panel_long_df[
         [
             "stock_id",
             "t",
             "state",
             *FIRM_CHARACTERISTIC_COLUMNS,
+            "mu",
             "alpha",
+            "epsilon_variance",
             "beta_mkt",
             "beta_smb",
             "beta_hml",

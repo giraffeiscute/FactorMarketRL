@@ -34,6 +34,7 @@ def test_main_pipeline_generates_panel_price_return_and_metadata_outputs(tmp_pat
     assert metadata["simulation_setup"]["T"] == 6
     assert metadata["market_state_setup"]["resolved_state_sequence"] == [1, 1, 1, 1, 1, 1]
     assert panel_df["state"].tolist() == [1] * 162
+    assert {"mu", "epsilon_variance"}.issubset(panel_df.columns)
     assert {
         "characteristic_1",
         "characteristic_2",
@@ -47,9 +48,27 @@ def test_main_pipeline_generates_panel_price_return_and_metadata_outputs(tmp_pat
 
     latent_state_df = result["latent_state_df"].sort_values(["stock_id", "t"]).reset_index(drop=True)
     beta_df = result["beta_df"].sort_values(["stock_id", "t"]).reset_index(drop=True)
-    assert np.allclose(beta_df["beta_mkt"], latent_state_df["latent_characteristic_1_state"])
-    assert np.allclose(beta_df["beta_smb"], latent_state_df["latent_characteristic_2_state"])
-    assert np.allclose(beta_df["beta_hml"], latent_state_df["latent_characteristic_3_state"])
+    exposure_matrix = np.asarray(result["config"]["exposure_setup"]["A"], dtype=float)
+    intercept_vector = np.asarray(result["config"]["exposure_setup"]["b"], dtype=float)
+    expected_beta_matrix = (
+        latent_state_df[
+            [
+                "latent_characteristic_1_state",
+                "latent_characteristic_2_state",
+                "latent_characteristic_3_state",
+            ]
+        ].to_numpy(dtype=float)
+        @ exposure_matrix.T
+        + intercept_vector
+    )
+    assert np.allclose(
+        beta_df[["beta_mkt", "beta_smb", "beta_hml"]].to_numpy(dtype=float),
+        expected_beta_matrix,
+    )
+    assert panel_df.loc[panel_df["stock_id"] == "stock_000", "mu"].unique().tolist() == [
+        "(-0.5,-0.5,-0.5)"
+    ]
+    assert panel_df["epsilon_variance"].round(10).tolist() == [0.02] * 162
 
     expected_return_wide = (
         result["panel_long_df"]

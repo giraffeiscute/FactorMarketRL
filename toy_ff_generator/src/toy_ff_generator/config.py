@@ -124,11 +124,11 @@ def build_default_config() -> dict[str, Any]:
         },
         "exposure_setup": {
             "A": [
-                [0.1, 0.0, 0.0],
-                [0.0, 1.0, 0.0],
-                [0.0, 0.0, 1.0],
+                [0.2, 0.0, 0.0],
+                [0.0, 0.5, 0.0],
+                [0.0, 0.0, 0.5],
             ],
-            "b": [1, 0.0, 0.0],
+            "b": [1, 0.4, 0.0],
         },
         "alpha_epsilon_mode_setup": {
             "alpha_group": "mid",
