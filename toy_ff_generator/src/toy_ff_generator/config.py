@@ -9,6 +9,7 @@ STATE_ORDER = (-1, 0, 1)
 STATE_NAME_MAP = {-1: "bear", 0: "neutral", 1: "bull"}
 MU_CLASS_LABELS = ("low", "mid", "high")
 MU_AXES = ("characteristic_1", "characteristic_2", "characteristic_3")
+PROFILE_GROUP_LABELS = ("mid", "low", "high")
 
 
 def _default_mu_class_centers() -> dict[str, float]:
@@ -28,6 +29,31 @@ def _default_mu_class_triplets(n: int) -> list[tuple[str, str, str]]:
     return [all_triplets[idx % len(all_triplets)] for idx in range(n)]
 
 
+def _default_stock_profiles(
+    n: int,
+) -> list[tuple[tuple[str, str, str], str, str]]:
+    """Build a deterministic cycle over (mu_i triplet, alpha_group, epsilon_group)."""
+
+    mu_triplets = _default_mu_class_triplets(len(MU_CLASS_LABELS) ** len(MU_AXES))
+    all_profiles = [
+        (mu_triplet, alpha_group, epsilon_group)
+        for alpha_group in PROFILE_GROUP_LABELS
+        for epsilon_group in PROFILE_GROUP_LABELS
+        for mu_triplet in mu_triplets
+    ]
+    return [all_profiles[idx % len(all_profiles)] for idx in range(n)]
+
+
+def _default_per_stock_alpha_epsilon_groups(n: int) -> dict[str, list[str]]:
+    """Build deterministic per-stock alpha/epsilon group assignments."""
+
+    stock_profiles = _default_stock_profiles(n)
+    return {
+        "per_stock_alpha_groups": [alpha_group for _, alpha_group, _ in stock_profiles],
+        "per_stock_epsilon_groups": [epsilon_group for _, _, epsilon_group in stock_profiles],
+    }
+
+
 def _triplets_to_mu_vectors(
     triplets: list[tuple[str, str, str]],
     class_centers: dict[str, float],
@@ -44,7 +70,7 @@ def _default_per_stock_latent_state_params(n: int) -> dict[str, list[list[float]
     """Build deterministic per-stock latent characteristic-state parameters with fixed mu_i."""
 
     class_centers = _default_mu_class_centers()
-    mu_class_triplets = _default_mu_class_triplets(n)
+    mu_class_triplets = [mu_triplet for mu_triplet, _, _ in _default_stock_profiles(n)]
     mu_i = _triplets_to_mu_vectors(mu_class_triplets, class_centers)
 
     return {
@@ -65,7 +91,7 @@ def _default_per_stock_initial_prices(n: int) -> list[float]:
 def build_default_config() -> dict[str, Any]:
     """Build the project default simulation config."""
 
-    N = 27
+    N = 54
     T = 10
     return {
         "simulation_setup": {
@@ -134,15 +160,16 @@ def build_default_config() -> dict[str, Any]:
             "alpha_group": "mid",
             "epsilon_group": "mid",
             "alpha_levels": {
-                "low": -0.01,
-                "mid": 0.002,
-                "high": 0.01,
+                "low": -0.0001,
+                "mid": 0.0002,
+                "high": 0.0003,
             },
             "epsilon_levels": {
                 "low": 0.01,
-                "mid": 0.02,
-                "high": 0.03,
+                "mid": 0.025,
+                "high": 0.04,
             },
+            **_default_per_stock_alpha_epsilon_groups(N),
         },
         "clipping_price_setup": {
             "limit_up": 0.10,

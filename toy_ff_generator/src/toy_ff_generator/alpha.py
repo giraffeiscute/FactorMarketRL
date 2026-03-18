@@ -23,8 +23,20 @@ def generate_alpha(
     stock_ids: Sequence[str],
     alpha_group: str,
     alpha_levels: Mapping[str, float],
+    per_stock_alpha_groups: Sequence[str] | None = None,
 ) -> pd.DataFrame:
-    """Generate a constant alpha for all stocks from the configured group."""
+    """Generate alphas from either a shared group or fixed per-stock groups."""
+
+    if per_stock_alpha_groups is not None:
+        return pd.DataFrame(
+            {
+                "stock_id": list(stock_ids),
+                "alpha": [
+                    resolve_alpha_value(group_name, alpha_levels)
+                    for group_name in per_stock_alpha_groups
+                ],
+            }
+        )
 
     alpha_value = resolve_alpha_value(
         alpha_group=alpha_group,

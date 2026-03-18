@@ -22,6 +22,7 @@ from toy_ff_generator.characteristics import (
 from toy_ff_generator.config import (
     STATE_NAME_MAP,
     STATE_ORDER,
+    _default_per_stock_alpha_epsilon_groups,
     _default_per_stock_initial_prices,
     _default_per_stock_latent_state_params,
     build_default_config,
@@ -166,6 +167,7 @@ def _apply_overrides(
     if N is not None:
         updated["simulation_setup"]["N"] = N
         updated["latent_characteristic_setup"]["per_stock_params"] = _default_per_stock_latent_state_params(N)
+        updated["alpha_epsilon_mode_setup"].update(_default_per_stock_alpha_epsilon_groups(N))
         updated["clipping_price_setup"]["per_stock_initial_price"] = _default_per_stock_initial_prices(N)
     if T is not None:
         updated["simulation_setup"]["T"] = T
@@ -275,6 +277,7 @@ def run_simulation(
         stock_ids=stock_ids,
         alpha_group=alpha_epsilon_mode_setup["alpha_group"],
         alpha_levels=alpha_epsilon_mode_setup["alpha_levels"],
+        per_stock_alpha_groups=alpha_epsilon_mode_setup.get("per_stock_alpha_groups"),
     )
 
     epsilon_df = generate_noise(
@@ -283,6 +286,7 @@ def run_simulation(
         epsilon_group=alpha_epsilon_mode_setup["epsilon_group"],
         epsilon_levels=alpha_epsilon_mode_setup["epsilon_levels"],
         rng=rng,
+        per_stock_epsilon_groups=alpha_epsilon_mode_setup.get("per_stock_epsilon_groups"),
     )
     validate_component_row_count(
         name="epsilon_df",
@@ -334,12 +338,44 @@ def run_simulation(
                 strict=True,
             )
         }
-    epsilon_variance = resolve_epsilon_sigma(
-        epsilon_group=alpha_epsilon_mode_setup["epsilon_group"],
-        epsilon_levels=alpha_epsilon_mode_setup["epsilon_levels"],
-    )
+    alpha_group_by_stock = {
+        stock_id: group_name
+        for stock_id, group_name in zip(
+            stock_ids,
+            alpha_epsilon_mode_setup.get("per_stock_alpha_groups", []),
+            strict=False,
+        )
+    }
+    if not alpha_group_by_stock:
+        alpha_group_by_stock = {
+            stock_id: alpha_epsilon_mode_setup["alpha_group"]
+            for stock_id in stock_ids
+        }
+
+    epsilon_group_by_stock = {
+        stock_id: group_name
+        for stock_id, group_name in zip(
+            stock_ids,
+            alpha_epsilon_mode_setup.get("per_stock_epsilon_groups", []),
+            strict=False,
+        )
+    }
+    if not epsilon_group_by_stock:
+        epsilon_group_by_stock = {
+            stock_id: alpha_epsilon_mode_setup["epsilon_group"]
+            for stock_id in stock_ids
+        }
+    epsilon_variance_by_stock = {
+        stock_id: resolve_epsilon_sigma(
+            epsilon_group=group_name,
+            epsilon_levels=alpha_epsilon_mode_setup["epsilon_levels"],
+        )
+        for stock_id, group_name in epsilon_group_by_stock.items()
+    }
     panel_long_df["mu"] = panel_long_df["stock_id"].map(mu_by_stock)
-    panel_long_df["epsilon_variance"] = epsilon_variance
+    panel_long_df["alpha_group"] = panel_long_df["stock_id"].map(alpha_group_by_stock)
+    panel_long_df["epsilon_group"] = panel_long_df["stock_id"].map(epsilon_group_by_stock)
+    panel_long_df["epsilon_variance"] = panel_long_df["stock_id"].map(epsilon_variance_by_stock)
 
     panel_long_df = panel_long_df[
         [

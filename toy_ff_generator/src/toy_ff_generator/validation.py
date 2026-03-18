@@ -374,13 +374,40 @@ def _validate_group_levels(
             )
 
 
+def _validate_optional_per_stock_groups(
+    *,
+    name: str,
+    values: Sequence[object] | None,
+    expected_rows: int,
+) -> None:
+    if values is None:
+        return
+
+    if len(values) != expected_rows:
+        raise ValueError(
+            f"{name} must have length {expected_rows}. Received {len(values)}."
+        )
+
+    invalid_groups = sorted(
+        {str(value) for value in values} - set(ALPHA_EPSILON_GROUPS)
+    )
+    if invalid_groups:
+        raise ValueError(
+            f"{name} must only contain {list(ALPHA_EPSILON_GROUPS)}. "
+            f"Received invalid values: {invalid_groups}."
+        )
+
+
 def validate_alpha_epsilon_mode_setup(
+    N: int,
     alpha_epsilon_mode_setup: Mapping[str, object],
 ) -> None:
     alpha_group = str(alpha_epsilon_mode_setup["alpha_group"])
     epsilon_group = str(alpha_epsilon_mode_setup["epsilon_group"])
     alpha_levels = alpha_epsilon_mode_setup["alpha_levels"]
     epsilon_levels = alpha_epsilon_mode_setup["epsilon_levels"]
+    per_stock_alpha_groups = alpha_epsilon_mode_setup.get("per_stock_alpha_groups")
+    per_stock_epsilon_groups = alpha_epsilon_mode_setup.get("per_stock_epsilon_groups")
 
     if not isinstance(alpha_levels, Mapping):
         raise ValueError("alpha_levels must be a mapping from group name to alpha value.")
@@ -398,6 +425,17 @@ def validate_alpha_epsilon_mode_setup(
         raise ValueError(
             f"epsilon_group must be one of {sorted(epsilon_levels)}. Received {epsilon_group!r}."
         )
+
+    _validate_optional_per_stock_groups(
+        name="per_stock_alpha_groups",
+        values=per_stock_alpha_groups,
+        expected_rows=N,
+    )
+    _validate_optional_per_stock_groups(
+        name="per_stock_epsilon_groups",
+        values=per_stock_epsilon_groups,
+        expected_rows=N,
+    )
 
     for group_name in ALPHA_EPSILON_GROUPS:
         _validate_positive(
@@ -459,7 +497,7 @@ def validate_simulation_inputs(
     validate_mu_class_setup(mu_class_setup=mu_class_setup)
     validate_latent_characteristic_setup(N=N, latent_characteristic_setup=latent_characteristic_setup)
     validate_exposure_setup(exposure_setup=exposure_setup)
-    validate_alpha_epsilon_mode_setup(alpha_epsilon_mode_setup=alpha_epsilon_mode_setup)
+    validate_alpha_epsilon_mode_setup(N=N, alpha_epsilon_mode_setup=alpha_epsilon_mode_setup)
     validate_clipping_price_setup(N=N, clipping_price_setup=clipping_price_setup)
 
 

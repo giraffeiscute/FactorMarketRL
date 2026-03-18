@@ -105,7 +105,8 @@ def test_validate_alpha_epsilon_mode_setup_rejects_unknown_group() -> None:
         match=r"alpha_group must be one of",
     ):
         validate_alpha_epsilon_mode_setup(
-            {
+            N=1,
+            alpha_epsilon_mode_setup={
                 "alpha_group": "ultra",
                 "epsilon_group": "low",
                 "alpha_levels": {
@@ -119,6 +120,56 @@ def test_validate_alpha_epsilon_mode_setup_rejects_unknown_group() -> None:
                     "high": 0.03,
                 },
             }
+        )
+
+
+def test_validate_alpha_epsilon_mode_setup_rejects_invalid_per_stock_group_length() -> None:
+    with pytest.raises(
+        ValueError,
+        match=r"per_stock_alpha_groups must have length 2",
+    ):
+        validate_alpha_epsilon_mode_setup(
+            N=2,
+            alpha_epsilon_mode_setup={
+                "alpha_group": "mid",
+                "epsilon_group": "mid",
+                "alpha_levels": {
+                    "low": 0.001,
+                    "mid": 0.002,
+                    "high": 0.003,
+                },
+                "epsilon_levels": {
+                    "low": 0.01,
+                    "mid": 0.02,
+                    "high": 0.03,
+                },
+                "per_stock_alpha_groups": ["low"],
+            },
+        )
+
+
+def test_validate_alpha_epsilon_mode_setup_rejects_invalid_per_stock_group_value() -> None:
+    with pytest.raises(
+        ValueError,
+        match=r"per_stock_epsilon_groups must only contain",
+    ):
+        validate_alpha_epsilon_mode_setup(
+            N=2,
+            alpha_epsilon_mode_setup={
+                "alpha_group": "mid",
+                "epsilon_group": "mid",
+                "alpha_levels": {
+                    "low": 0.001,
+                    "mid": 0.002,
+                    "high": 0.003,
+                },
+                "epsilon_levels": {
+                    "low": 0.01,
+                    "mid": 0.02,
+                    "high": 0.03,
+                },
+                "per_stock_epsilon_groups": ["low", "ultra"],
+            },
         )
 
 

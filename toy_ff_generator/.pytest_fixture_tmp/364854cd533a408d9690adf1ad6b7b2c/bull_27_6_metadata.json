@@ -1,12 +1,19 @@
 {
   "simulation_setup": {
     "N": 27,
-    "T": 10,
-    "random_seed": 42
+    "T": 6,
+    "random_seed": 11
   },
   "market_state_setup": {
-    "state_sequence": null,
-    "initial_state": 0,
+    "state_sequence": [
+      1,
+      1,
+      1,
+      1,
+      1,
+      1
+    ],
+    "initial_state": 1,
     "transition_matrix": [
       [
         1,
@@ -25,16 +32,12 @@
       ]
     ],
     "resolved_state_sequence": [
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0
+      1,
+      1,
+      1,
+      1,
+      1,
+      1
     ]
   },
   "factor_vector_ar_setup": {
@@ -983,6 +986,6 @@
     ]
   },
   "output_setup": {
-    "output_dir": "C:\\Users\\Yuan\\Desktop\\YUAN\\\u5be6\u7fd2\\\u5317\u4eac\u91cf\u5316\u5be6\u7fd2\\FactorMarketRL\\toy_ff_generator\\outputs"
+    "output_dir": "C:\\Users\\Yuan\\Desktop\\YUAN\\\u5be6\u7fd2\\\u5317\u4eac\u91cf\u5316\u5be6\u7fd2\\FactorMarketRL\\toy_ff_generator\\.pytest_fixture_tmp\\364854cd533a408d9690adf1ad6b7b2c"
   }
 }

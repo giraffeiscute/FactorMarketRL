@@ -35,6 +35,7 @@ def test_main_pipeline_generates_panel_price_return_and_metadata_outputs(tmp_pat
     assert metadata["market_state_setup"]["resolved_state_sequence"] == [1, 1, 1, 1, 1, 1]
     assert panel_df["state"].tolist() == [1] * 162
     assert {"mu", "epsilon_variance"}.issubset(panel_df.columns)
+    assert {"alpha_group", "epsilon_group"}.isdisjoint(panel_df.columns)
     assert {
         "characteristic_1",
         "characteristic_2",
@@ -112,3 +113,24 @@ def test_excel_view_uses_new_characteristic_axis_labels() -> None:
         "characteristic_2",
         "characteristic_3",
     ]
+
+
+def test_main_pipeline_covers_all_243_deterministic_stock_profiles(tmp_path) -> None:
+    result = run_simulation(output_dir=str(tmp_path), seed=11, N=243, T=1, S=0)
+
+    mu_by_stock = (
+        result["panel_long_df"][["stock_id", "mu"]]
+        .drop_duplicates()
+        .sort_values("stock_id")
+        .reset_index(drop=True)
+    )
+    alpha_groups = result["config"]["alpha_epsilon_mode_setup"]["per_stock_alpha_groups"]
+    epsilon_groups = result["config"]["alpha_epsilon_mode_setup"]["per_stock_epsilon_groups"]
+    profile_df = mu_by_stock.copy()
+    profile_df["alpha_group"] = alpha_groups
+    profile_df["epsilon_group"] = epsilon_groups
+    profile_df = profile_df[["mu", "alpha_group", "epsilon_group"]].drop_duplicates()
+
+    assert len(profile_df) == 243
+    assert set(profile_df["alpha_group"]) == {"low", "mid", "high"}
+    assert set(profile_df["epsilon_group"]) == {"low", "mid", "high"}
