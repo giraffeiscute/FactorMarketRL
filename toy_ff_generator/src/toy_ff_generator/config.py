@@ -100,8 +100,8 @@ def _default_per_stock_initial_prices(n: int) -> list[float]:
 def build_default_config() -> dict[str, Any]:
     """Build the project default simulation config."""
 
-    N = 540
-    T = 20
+    N = 5460
+    T = 40
     return {
         "simulation_setup": {
             "N": N,

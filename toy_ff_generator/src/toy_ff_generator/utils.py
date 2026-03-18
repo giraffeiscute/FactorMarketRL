@@ -112,6 +112,11 @@ def _save_market_index_png(
         sharex=True,
     )
     x_values = market_index_df["t"].map(lambda value: int(str(value).split("_")[-1]))
+    max_tick_count = 12
+    tick_step = max(1, int(np.ceil(len(x_values) / max_tick_count)))
+    tick_values = x_values.iloc[::tick_step].tolist()
+    if tick_values and tick_values[-1] != int(x_values.iloc[-1]):
+        tick_values.append(int(x_values.iloc[-1]))
     try:
         market_axis.plot(
             x_values,
@@ -133,7 +138,7 @@ def _save_market_index_png(
             )
         factor_axis.set_xlabel("t")
         factor_axis.set_ylabel("factor")
-        factor_axis.set_xticks(x_values.tolist())
+        factor_axis.set_xticks(tick_values)
         factor_axis.grid(True, alpha=0.3)
         factor_axis.legend(loc="best")
         figure.tight_layout()
