@@ -11,7 +11,7 @@
 - Default config uses `A = I_3` and `b = [0, 0, 0]`, so each latent axis maps one-to-one to one beta axis.
 - `mu_i` is the white-box fixed characteristic-class center.
 - Current csv outputs are:
-  `{status}_{N}_{T}_panel_long.csv`, `{status}_{N}_{T}_price.csv`, `{status}_{N}_{T}_return.csv`
+  `{status}_{N}_{T}_panel_long.csv`, `{status}_{N}_{T}_price.csv`, `{status}_{N}_{T}_return.csv`, `{status}_{N}_{T}_market_index.csv`
 
 這個專案是一個透明、可檢查、可解釋的 toy data generating process（DGP），用來模擬股票報酬與價格。它的用途是做檢查、除錯與實驗，不是實盤交易策略。
 
@@ -695,7 +695,7 @@ src/toy_ff_generator/main.py
 
 ## 輸出格式
 
-程式會在 `outputs/` 目錄下輸出 4 個檔案：
+程式會在 `outputs/` 目錄下輸出 6 個檔案：
 
 1. `{status}_{N}_{T}_return.csv`
    - `N x T` 的 wide matrix
@@ -714,7 +714,16 @@ src/toy_ff_generator/main.py
    - 欄位至少包含：
      `stock_id, t, state, characteristic_1, characteristic_2, characteristic_3, alpha, beta_mkt, beta_smb, beta_hml, MKT, SMB, HML, epsilon, raw_return, return, price`
 
-4. `metadata.json`
+4. `{status}_{N}_{T}_market_index.csv`
+   - 欄位為 `t, market_index, MKT, SMB, HML`
+   - `market_index_t = 同一時間點所有股票價格總和 / N`
+   - `MKT, SMB, HML` 為同一時間點的因子值
+
+5. `{status}_{N}_{T}_market_index.png`
+   - 同一張圖會畫出 `market_index` 與各時間點的 `MKT / SMB / HML`
+   - title 會標示 state / N / T / market index
+
+6. `metadata.json`
    - 儲存本次模擬所使用的主要設定參數
 
 ## 測試

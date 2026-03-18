@@ -32,7 +32,7 @@ def _default_mu_class_triplets(n: int) -> list[tuple[str, str, str]]:
 def _default_stock_profiles(
     n: int,
 ) -> list[tuple[tuple[str, str, str], str, str]]:
-    """Build a deterministic cycle over (mu_i triplet, alpha_group, epsilon_group)."""
+    """Build deterministic contiguous stock blocks over the 243 base profiles."""
 
     mu_triplets = _default_mu_class_triplets(len(MU_CLASS_LABELS) ** len(MU_AXES))
     all_profiles = [
@@ -41,7 +41,16 @@ def _default_stock_profiles(
         for epsilon_group in PROFILE_GROUP_LABELS
         for mu_triplet in mu_triplets
     ]
-    return [all_profiles[idx % len(all_profiles)] for idx in range(n)]
+    base_profile_count = len(all_profiles)
+    base_block_size = n // base_profile_count
+    remainder = n % base_profile_count
+
+    stock_profiles: list[tuple[tuple[str, str, str], str, str]] = []
+    for idx, profile in enumerate(all_profiles):
+        block_size = base_block_size + (1 if idx < remainder else 0)
+        stock_profiles.extend([profile] * block_size)
+
+    return stock_profiles
 
 
 def _default_per_stock_alpha_epsilon_groups(n: int) -> dict[str, list[str]]:
@@ -91,8 +100,8 @@ def _default_per_stock_initial_prices(n: int) -> list[float]:
 def build_default_config() -> dict[str, Any]:
     """Build the project default simulation config."""
 
-    N = 54
-    T = 10
+    N = 540
+    T = 20
     return {
         "simulation_setup": {
             "N": N,
@@ -115,7 +124,7 @@ def build_default_config() -> dict[str, Any]:
                 [0.04, 0.55, 0.03],
                 [0.02, 0.04, 0.25],
             ],
-            "mu_bear": [-0.03, -0.003, 0.001],
+            "mu_bear": [-0.01, -0.003, 0.001],
             "mu_neutral": [0.0003, 0.0, 0.0],
             "mu_bull": [0.01, 0.01, -0.01],
             "Sigma_X_bear": [
@@ -150,7 +159,7 @@ def build_default_config() -> dict[str, Any]:
         },
         "exposure_setup": {
             "A": [
-                [0.2, 0.0, 0.0],
+                [0.1, 0.0, 0.0],
                 [0.0, 0.5, 0.0],
                 [0.0, 0.0, 0.5],
             ],

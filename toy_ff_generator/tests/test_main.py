@@ -1,10 +1,12 @@
 """Integration tests for the main pipeline."""
 
 import json
+from itertools import groupby
 
 import numpy as np
 import pandas as pd
 
+from toy_ff_generator.config import _default_stock_profiles
 from toy_ff_generator.main import run_simulation
 from toy_ff_generator.utils import build_firm_characteristics_excel_view
 
@@ -15,16 +17,21 @@ def test_main_pipeline_generates_panel_price_return_and_metadata_outputs(tmp_pat
     prices_path = tmp_path / "bull_27_6_price.csv"
     returns_path = tmp_path / "bull_27_6_return.csv"
     panel_path = tmp_path / "bull_27_6_panel_long.csv"
+    market_index_csv_path = tmp_path / "bull_27_6_market_index.csv"
+    market_index_png_path = tmp_path / "bull_27_6_market_index.png"
     metadata_path = tmp_path / "bull_27_6_metadata.json"
 
     assert prices_path.exists()
     assert returns_path.exists()
     assert panel_path.exists()
+    assert market_index_csv_path.exists()
+    assert market_index_png_path.exists()
     assert metadata_path.exists()
 
     prices_df = pd.read_csv(prices_path, index_col=0)
     returns_df = pd.read_csv(returns_path, index_col=0)
     panel_df = pd.read_csv(panel_path)
+    market_index_df = pd.read_csv(market_index_csv_path)
     metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
 
     assert prices_df.shape == (27, 6)
@@ -90,10 +97,29 @@ def test_main_pipeline_generates_panel_price_return_and_metadata_outputs(tmp_pat
     )
     assert np.allclose(returns_df.to_numpy(dtype=float), expected_return_wide.to_numpy(dtype=float))
     assert np.allclose(prices_df.to_numpy(dtype=float), expected_price_wide.to_numpy(dtype=float))
+    expected_market_index_df = (
+        result["panel_long_df"]
+        .groupby("t", as_index=False)
+        .agg(
+            market_index=("price", "mean"),
+            MKT=("MKT", "first"),
+            SMB=("SMB", "first"),
+            HML=("HML", "first"),
+        )
+    )
+    assert market_index_df.columns.tolist() == ["t", "market_index", "MKT", "SMB", "HML"]
+    assert market_index_df["t"].tolist() == expected_market_index_df["t"].tolist()
+    for column_name in ("market_index", "MKT", "SMB", "HML"):
+        assert np.allclose(
+            market_index_df[column_name].to_numpy(dtype=float),
+            expected_market_index_df[column_name].to_numpy(dtype=float),
+        )
 
     assert result["output_paths"]["prices"] == prices_path
     assert result["output_paths"]["returns"] == returns_path
     assert result["output_paths"]["panel_long"] == panel_path
+    assert result["output_paths"]["market_index_csv"] == market_index_csv_path
+    assert result["output_paths"]["market_index_png"] == market_index_png_path
     assert result["output_paths"]["metadata"] == metadata_path
 
 
@@ -139,3 +165,38 @@ def test_main_pipeline_covers_all_243_deterministic_stock_profiles(tmp_path) -> 
     assert len(profile_df) == 243
     assert set(profile_df["alpha_group"]) == {"low", "mid", "high"}
     assert set(profile_df["epsilon_group"]) == {"low", "mid", "high"}
+
+
+def test_default_stock_profiles_assign_ten_stocks_per_profile_for_n_2430() -> None:
+    grouped_profiles = [
+        (profile, len(list(group)))
+        for profile, group in groupby(_default_stock_profiles(2430))
+    ]
+
+    assert len(grouped_profiles) == 243
+    assert all(count == 10 for _, count in grouped_profiles)
+
+
+def test_default_stock_profiles_assign_remainder_to_front_profiles_for_n_300() -> None:
+    grouped_profiles = [
+        (profile, len(list(group)))
+        for profile, group in groupby(_default_stock_profiles(300))
+    ]
+    base_profiles = _default_stock_profiles(243)
+
+    assert len(grouped_profiles) == 243
+    assert [profile for profile, _ in grouped_profiles] == base_profiles
+    assert [count for _, count in grouped_profiles[:57]] == [2] * 57
+    assert [count for _, count in grouped_profiles[57:]] == [1] * (243 - 57)
+
+
+def test_default_stock_profiles_keep_profiles_contiguous_in_stock_order() -> None:
+    grouped_profiles = [
+        (profile, len(list(group)))
+        for profile, group in groupby(_default_stock_profiles(486))
+    ]
+    base_profiles = _default_stock_profiles(243)
+
+    assert len(grouped_profiles) == 243
+    assert [profile for profile, _ in grouped_profiles] == base_profiles
+    assert all(count == 2 for _, count in grouped_profiles)

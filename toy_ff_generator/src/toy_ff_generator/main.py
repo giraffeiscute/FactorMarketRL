@@ -139,6 +139,28 @@ def _build_return_filename(
     return f"{state_name}_{stock_count}_{time_count}_return.csv"
 
 
+def _build_market_index_csv_filename(
+    state_sequence: list[int],
+    market_state_setup: Mapping[str, Any],
+    simulation_setup: Mapping[str, Any],
+) -> str:
+    state_name = _format_state_for_filename(state_sequence, market_state_setup)
+    stock_count = int(simulation_setup["N"])
+    time_count = int(simulation_setup["T"])
+    return f"{state_name}_{stock_count}_{time_count}_market_index.csv"
+
+
+def _build_market_index_png_filename(
+    state_sequence: list[int],
+    market_state_setup: Mapping[str, Any],
+    simulation_setup: Mapping[str, Any],
+) -> str:
+    state_name = _format_state_for_filename(state_sequence, market_state_setup)
+    stock_count = int(simulation_setup["N"])
+    time_count = int(simulation_setup["T"])
+    return f"{state_name}_{stock_count}_{time_count}_market_index.png"
+
+
 def _build_metadata_filename(
     state_sequence: list[int],
     market_state_setup: Mapping[str, Any],
@@ -414,6 +436,16 @@ def run_simulation(
         market_state_setup=market_state_setup,
         simulation_setup=simulation_setup,
     )
+    market_index_csv_filename = _build_market_index_csv_filename(
+        state_sequence=state_sequence,
+        market_state_setup=market_state_setup,
+        simulation_setup=simulation_setup,
+    )
+    market_index_png_filename = _build_market_index_png_filename(
+        state_sequence=state_sequence,
+        market_state_setup=market_state_setup,
+        simulation_setup=simulation_setup,
+    )
     metadata_filename = _build_metadata_filename(
         state_sequence=state_sequence,
         market_state_setup=market_state_setup,
@@ -426,6 +458,14 @@ def run_simulation(
         panel_filename=panel_filename,
         price_filename=price_filename,
         return_filename=return_filename,
+        market_index_csv_filename=market_index_csv_filename,
+        market_index_png_filename=market_index_png_filename,
+        market_index_plot_title=(
+            "market index | "
+            f"state={_format_state_for_filename(state_sequence, market_state_setup)} | "
+            f"N={int(simulation_setup['N'])} | "
+            f"T={int(simulation_setup['T'])}"
+        ),
         metadata_filename=metadata_filename,
         time_columns=time_columns,
         metadata=config,
