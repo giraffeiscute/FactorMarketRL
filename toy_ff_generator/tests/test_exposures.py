@@ -1,4 +1,4 @@
-"""Tests for exposure generation from latent beta-axis states."""
+"""Tests for exposure generation from latent characteristic states."""
 
 import pandas as pd
 
@@ -10,9 +10,9 @@ def test_generate_exposures_identity_mapping_matches_latent_state_axes() -> None
         {
             "stock_id": ["stock_000", "stock_001", "stock_002"],
             "t": ["t_0", "t_0", "t_0"],
-            "latent_beta_mkt_state": [0.0, 2.0, -0.5],
-            "latent_beta_smb_state": [-0.2, 0.4, 0.7],
-            "latent_beta_hml_state": [1.2, -1.1, 0.3],
+            "latent_characteristic_1_state": [0.0, 2.0, -0.5],
+            "latent_characteristic_2_state": [-0.2, 0.4, 0.7],
+            "latent_characteristic_3_state": [1.2, -1.1, 0.3],
         }
     )
 

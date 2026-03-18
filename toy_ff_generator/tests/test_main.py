@@ -35,21 +35,21 @@ def test_main_pipeline_generates_panel_price_return_and_metadata_outputs(tmp_pat
     assert metadata["market_state_setup"]["resolved_state_sequence"] == [1, 1, 1, 1, 1, 1]
     assert panel_df["state"].tolist() == [1] * 162
     assert {
-        "characteristic_beta_mkt",
-        "characteristic_beta_smb",
-        "characteristic_beta_hml",
+        "characteristic_1",
+        "characteristic_2",
+        "characteristic_3",
     }.issubset(panel_df.columns)
     assert {
-        "latent_beta_mkt_state",
-        "latent_beta_smb_state",
-        "latent_beta_hml_state",
+        "latent_characteristic_1_state",
+        "latent_characteristic_2_state",
+        "latent_characteristic_3_state",
     }.isdisjoint(panel_df.columns)
 
     latent_state_df = result["latent_state_df"].sort_values(["stock_id", "t"]).reset_index(drop=True)
     beta_df = result["beta_df"].sort_values(["stock_id", "t"]).reset_index(drop=True)
-    assert np.allclose(beta_df["beta_mkt"], latent_state_df["latent_beta_mkt_state"])
-    assert np.allclose(beta_df["beta_smb"], latent_state_df["latent_beta_smb_state"])
-    assert np.allclose(beta_df["beta_hml"], latent_state_df["latent_beta_hml_state"])
+    assert np.allclose(beta_df["beta_mkt"], latent_state_df["latent_characteristic_1_state"])
+    assert np.allclose(beta_df["beta_smb"], latent_state_df["latent_characteristic_2_state"])
+    assert np.allclose(beta_df["beta_hml"], latent_state_df["latent_characteristic_3_state"])
 
     expected_return_wide = (
         result["panel_long_df"]
@@ -77,9 +77,9 @@ def test_excel_view_uses_new_characteristic_axis_labels() -> None:
         {
             "stock_id": ["stock_000", "stock_000"],
             "t": ["t_0", "t_1"],
-            "characteristic_beta_mkt": [1.5, 1.6],
-            "characteristic_beta_smb": [0.9, 1.1],
-            "characteristic_beta_hml": [-0.2, 0.3],
+            "characteristic_1": [1.5, 1.6],
+            "characteristic_2": [0.9, 1.1],
+            "characteristic_3": [-0.2, 0.3],
         }
     )
 
@@ -89,7 +89,7 @@ def test_excel_view_uses_new_characteristic_axis_labels() -> None:
 
     assert excel_view.index.name == "firm_characteristic"
     assert excel_view.index.tolist() == [
-        "characteristic_beta_mkt",
-        "characteristic_beta_smb",
-        "characteristic_beta_hml",
+        "characteristic_1",
+        "characteristic_2",
+        "characteristic_3",
     ]

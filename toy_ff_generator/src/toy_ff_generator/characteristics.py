@@ -1,4 +1,4 @@
-"""Latent characteristic states aligned one-to-one with the three beta axes."""
+"""Latent characteristic states aligned one-to-one with three characteristic axes."""
 
 from __future__ import annotations
 
@@ -8,14 +8,14 @@ import numpy as np
 import pandas as pd
 
 LATENT_STATE_NAMES = (
-    "latent_beta_mkt_state",
-    "latent_beta_smb_state",
-    "latent_beta_hml_state",
+    "latent_characteristic_1_state",
+    "latent_characteristic_2_state",
+    "latent_characteristic_3_state",
 )
 FIRM_CHARACTERISTIC_NAMES = (
-    "characteristic_beta_mkt",
-    "characteristic_beta_smb",
-    "characteristic_beta_hml",
+    "characteristic_1",
+    "characteristic_2",
+    "characteristic_3",
 )
 LATENT_STATE_COLUMNS = list(LATENT_STATE_NAMES)
 FIRM_CHARACTERISTIC_COLUMNS = list(FIRM_CHARACTERISTIC_NAMES)
@@ -135,7 +135,7 @@ def _build_latent_state_param_table(
 
 
 def latent_to_firm_characteristics(latent_state_values: np.ndarray) -> np.ndarray:
-    """Expose the three latent beta-axis states as observable characteristics."""
+    """Expose the three latent characteristic states as observable characteristics."""
 
     latent_state_array = np.asarray(latent_state_values, dtype=float)
     if latent_state_array.shape[-1] != LATENT_STATE_DIM:
@@ -177,7 +177,11 @@ def generate_latent_characteristic_states(
     shared_params: Mapping[str, Sequence[float]] | None = None,
     per_stock_params: Mapping[str, Sequence[Sequence[float]]] | None = None,
 ) -> pd.DataFrame:
-    """Generate latent beta-axis state paths."""
+    """Generate latent characteristic-state paths.
+
+    In per-stock mode, mu_i is a fixed stock-level vector used directly in
+    Z_{i,t} = Omega_i Z_{i,t-1} + mu_i + lambda_i S_t + xi_{i,t}.
+    """
 
     param_df = _build_latent_state_param_table(
         stock_ids=stock_ids,
@@ -196,7 +200,10 @@ def generate_latent_characteristic_states(
 
         for time_label, state in zip(time_columns, state_sequence, strict=True):
             innovation = rng.normal(loc=0.0, scale=sigma, size=LATENT_STATE_DIM)
-            current = mu + omega * (previous - mu) + lambda_vector * state + innovation
+            if use_shared_latent_state_params:
+                current = mu + omega * (previous - mu) + lambda_vector * state + innovation
+            else:
+                current = omega * previous + mu + lambda_vector * state + innovation
             rows.append(
                 {
                     "stock_id": row.stock_id,

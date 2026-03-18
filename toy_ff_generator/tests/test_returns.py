@@ -10,9 +10,9 @@ def test_returns_pipeline_small_manual_example() -> None:
         {
             "stock_id": ["stock_000", "stock_000", "stock_001", "stock_001"],
             "t": ["t_0", "t_1", "t_0", "t_1"],
-            "characteristic_beta_mkt": [1.0, 1.0, 1.0, 1.0],
-            "characteristic_beta_smb": [1.0, 1.0, 1.0, 1.0],
-            "characteristic_beta_hml": [1.0, 1.0, 1.0, 1.0],
+            "characteristic_1": [1.0, 1.0, 1.0, 1.0],
+            "characteristic_2": [1.0, 1.0, 1.0, 1.0],
+            "characteristic_3": [1.0, 1.0, 1.0, 1.0],
             "alpha": [0.01, 0.01, -0.02, -0.02],
             "beta_mkt": [1.0, 1.0, 0.5, 0.5],
             "beta_smb": [0.5, 0.5, 0.0, 0.0],

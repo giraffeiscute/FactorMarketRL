@@ -5,12 +5,12 @@ import pytest
 
 from toy_ff_generator.validation import (
     validate_alpha_epsilon_mode_setup,
-    validate_beta_class_setup,
     validate_beta_df,
     validate_exposure_setup,
     validate_firm_characteristics_df,
     validate_latent_characteristic_setup,
     validate_latent_state_df,
+    validate_mu_class_setup,
 )
 
 
@@ -50,12 +50,12 @@ def test_validate_exposure_setup_requires_three_dimensional_matrix_and_vector() 
         )
 
 
-def test_validate_beta_class_setup_requires_low_mid_high_centers() -> None:
+def test_validate_mu_class_setup_requires_low_mid_high_centers() -> None:
     with pytest.raises(
         ValueError,
         match=r"class_centers must define",
     ):
-        validate_beta_class_setup(
+        validate_mu_class_setup(
             {
                 "class_centers": {
                     "low": -0.5,
@@ -75,9 +75,9 @@ def test_validate_latent_state_df_requires_latent_columns() -> None:
                 {
                     "stock_id": ["stock_000"],
                     "t": ["t_0"],
-                    "characteristic_beta_mkt": [1.0],
-                    "characteristic_beta_smb": [0.0],
-                    "characteristic_beta_hml": [0.1],
+                    "characteristic_1": [1.0],
+                    "characteristic_2": [0.0],
+                    "characteristic_3": [0.1],
                 }
             ),
             expected_rows=1,
@@ -90,9 +90,9 @@ def test_validate_firm_characteristics_df_accepts_three_axis_values() -> None:
             {
                 "stock_id": ["stock_000"],
                 "t": ["t_0"],
-                "characteristic_beta_mkt": [1.0],
-                "characteristic_beta_smb": [0.0],
-                "characteristic_beta_hml": [-0.5],
+                "characteristic_1": [1.0],
+                "characteristic_2": [0.0],
+                "characteristic_3": [-0.5],
             }
         ),
         expected_rows=1,

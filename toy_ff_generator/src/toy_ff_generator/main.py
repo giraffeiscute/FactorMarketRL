@@ -213,7 +213,7 @@ def run_simulation(
         T=simulation_setup["T"],
         market_state_setup={**market_state_setup, "state_sequence": state_sequence},
         factor_vector_ar_setup=factor_vector_ar_setup,
-        beta_class_setup=config["beta_class_setup"],
+        mu_class_setup=config["mu_class_setup"],
         latent_characteristic_setup=latent_characteristic_setup,
         exposure_setup=exposure_setup,
         alpha_epsilon_mode_setup=alpha_epsilon_mode_setup,

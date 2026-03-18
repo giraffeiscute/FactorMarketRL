@@ -34,24 +34,24 @@ def test_generate_latent_states_and_observable_characteristics_follow_centered_r
     assert list(latent_state_df.columns) == [
         "stock_id",
         "t",
-        "latent_beta_mkt_state",
-        "latent_beta_smb_state",
-        "latent_beta_hml_state",
+        "latent_characteristic_1_state",
+        "latent_characteristic_2_state",
+        "latent_characteristic_3_state",
     ]
     assert list(firm_characteristics_df.columns) == [
         "stock_id",
         "t",
-        "characteristic_beta_mkt",
-        "characteristic_beta_smb",
-        "characteristic_beta_hml",
+        "characteristic_1",
+        "characteristic_2",
+        "characteristic_3",
     ]
 
     latent_stock_0_rows = latent_state_df.loc[
         latent_state_df["stock_id"] == "stock_000",
         [
-            "latent_beta_mkt_state",
-            "latent_beta_smb_state",
-            "latent_beta_hml_state",
+            "latent_characteristic_1_state",
+            "latent_characteristic_2_state",
+            "latent_characteristic_3_state",
         ],
     ].round(10)
     assert latent_stock_0_rows.values.tolist() == [
@@ -63,9 +63,9 @@ def test_generate_latent_states_and_observable_characteristics_follow_centered_r
     firm_stock_0_rows = firm_characteristics_df.loc[
         firm_characteristics_df["stock_id"] == "stock_000",
         [
-            "characteristic_beta_mkt",
-            "characteristic_beta_smb",
-            "characteristic_beta_hml",
+            "characteristic_1",
+            "characteristic_2",
+            "characteristic_3",
         ],
     ].to_numpy(dtype=float)
     assert np.allclose(
@@ -79,3 +79,37 @@ def test_generate_latent_states_and_observable_characteristics_follow_centered_r
             dtype=float,
         ),
     )
+
+
+def test_generate_latent_states_use_fixed_per_stock_mu_i_as_additive_term() -> None:
+    stock_ids = make_stock_ids(1)
+    time_columns = make_time_columns(3)
+
+    latent_state_df = generate_latent_characteristic_states(
+        stock_ids=stock_ids,
+        time_columns=time_columns,
+        state_sequence=[0, 1, -1],
+        use_shared_latent_state_params=False,
+        per_stock_params={
+            "Omega_i": [[0.5, 0.25, 0.0]],
+            "mu_i": [[1.0, 0.0, -1.0]],
+            "lambda_i": [[0.1, 0.2, 0.3]],
+            "sigma_Z_i": [[0.0, 0.0, 0.0]],
+            "Z0_i": [[2.0, 0.0, 1.0]],
+        },
+        rng=set_random_seed(7),
+    )
+
+    latent_stock_0_rows = latent_state_df.loc[
+        latent_state_df["stock_id"] == "stock_000",
+        [
+            "latent_characteristic_1_state",
+            "latent_characteristic_2_state",
+            "latent_characteristic_3_state",
+        ],
+    ].round(10)
+    assert latent_stock_0_rows.values.tolist() == [
+        [2.0, 0.0, -1.0],
+        [2.1, 0.2, -0.7],
+        [1.95, -0.15, -1.3],
+    ]

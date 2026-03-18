@@ -206,10 +206,10 @@ def validate_factor_setup(factor_vector_ar_setup: Mapping[str, object]) -> None:
     _validate_covariance_matrix("Sigma_X_bull", factor_vector_ar_setup["Sigma_X_bull"], (3, 3))
 
 
-def validate_beta_class_setup(beta_class_setup: Mapping[str, object]) -> None:
-    class_centers = beta_class_setup.get("class_centers")
+def validate_mu_class_setup(mu_class_setup: Mapping[str, object]) -> None:
+    class_centers = mu_class_setup.get("class_centers")
     if not isinstance(class_centers, Mapping):
-        raise ValueError("beta_class_setup['class_centers'] must be a mapping.")
+        raise ValueError("mu_class_setup['class_centers'] must be a mapping.")
 
     missing_groups = [
         group_name for group_name in ALPHA_EPSILON_GROUPS if group_name not in class_centers
@@ -443,7 +443,7 @@ def validate_simulation_inputs(
     T: int,
     market_state_setup: Mapping[str, object],
     factor_vector_ar_setup: Mapping[str, object],
-    beta_class_setup: Mapping[str, object],
+    mu_class_setup: Mapping[str, object],
     latent_characteristic_setup: Mapping[str, object],
     exposure_setup: Mapping[str, object],
     alpha_epsilon_mode_setup: Mapping[str, object],
@@ -456,7 +456,7 @@ def validate_simulation_inputs(
 
     validate_market_state_setup(T=T, market_state_setup=market_state_setup)
     validate_factor_setup(factor_vector_ar_setup=factor_vector_ar_setup)
-    validate_beta_class_setup(beta_class_setup=beta_class_setup)
+    validate_mu_class_setup(mu_class_setup=mu_class_setup)
     validate_latent_characteristic_setup(N=N, latent_characteristic_setup=latent_characteristic_setup)
     validate_exposure_setup(exposure_setup=exposure_setup)
     validate_alpha_epsilon_mode_setup(alpha_epsilon_mode_setup=alpha_epsilon_mode_setup)
@@ -504,4 +504,3 @@ def validate_beta_df(
             df=beta_df,
             expected_rows=expected_rows,
         )
-

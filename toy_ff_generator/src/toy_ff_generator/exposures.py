@@ -1,4 +1,4 @@
-"""Map latent beta-axis states to realized FF-style beta exposures."""
+"""Map latent characteristic states to realized FF-style beta exposures."""
 
 from __future__ import annotations
 

@@ -7,11 +7,13 @@ from typing import Any
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 STATE_ORDER = (-1, 0, 1)
 STATE_NAME_MAP = {-1: "bear", 0: "neutral", 1: "bull"}
-BETA_CLASS_LABELS = ("low", "mid", "high")
-BETA_CLASS_AXES = ("mkt", "smb", "hml")
+MU_CLASS_LABELS = ("low", "mid", "high")
+MU_AXES = ("characteristic_1", "characteristic_2", "characteristic_3")
 
 
-def _default_beta_class_centers() -> dict[str, float]:
+def _default_mu_class_centers() -> dict[str, float]:
+    """Return numeric centers for the three fixed mu_i class labels."""
+
     return {
         "low": -0.5,
         "mid": 0.0,
@@ -19,10 +21,10 @@ def _default_beta_class_centers() -> dict[str, float]:
     }
 
 
-def _default_beta_class_triplets(n: int) -> list[tuple[str, str, str]]:
-    """Build a deterministic stock universe by cycling over 27 true beta classes."""
+def _default_mu_class_triplets(n: int) -> list[tuple[str, str, str]]:
+    """Build a deterministic stock universe by cycling over 27 fixed mu_i triplets."""
 
-    all_triplets = list(product(BETA_CLASS_LABELS, repeat=len(BETA_CLASS_AXES)))
+    all_triplets = list(product(MU_CLASS_LABELS, repeat=len(MU_AXES)))
     return [all_triplets[idx % len(all_triplets)] for idx in range(n)]
 
 
@@ -30,18 +32,20 @@ def _triplets_to_mu_vectors(
     triplets: list[tuple[str, str, str]],
     class_centers: dict[str, float],
 ) -> list[list[float]]:
+    """Map fixed mu_i class triplets to fixed per-stock three-dimensional vectors."""
+
     return [
-        [class_centers[mkt_group], class_centers[smb_group], class_centers[hml_group]]
-        for mkt_group, smb_group, hml_group in triplets
+        [class_centers[class_label] for class_label in triplet]
+        for triplet in triplets
     ]
 
 
 def _default_per_stock_latent_state_params(n: int) -> dict[str, list[list[float]]]:
-    """Build deterministic per-stock latent beta-state parameters."""
+    """Build deterministic per-stock latent characteristic-state parameters with fixed mu_i."""
 
-    class_centers = _default_beta_class_centers()
-    beta_class_triplets = _default_beta_class_triplets(n)
-    mu_i = _triplets_to_mu_vectors(beta_class_triplets, class_centers)
+    class_centers = _default_mu_class_centers()
+    mu_class_triplets = _default_mu_class_triplets(n)
+    mu_i = _triplets_to_mu_vectors(mu_class_triplets, class_centers)
 
     return {
         "Omega_i": [[0.65, 0.65, 0.65] for _ in range(n)],
@@ -104,8 +108,8 @@ def build_default_config() -> dict[str, Any]:
                 [0.00005, 0.00006, 0.00045],
             ],
         },
-        "beta_class_setup": {
-            "class_centers": _default_beta_class_centers(),
+        "mu_class_setup": {
+            "class_centers": _default_mu_class_centers(),
         },
         "latent_characteristic_setup": {
             "use_shared_latent_state_params": False,
@@ -120,11 +124,11 @@ def build_default_config() -> dict[str, Any]:
         },
         "exposure_setup": {
             "A": [
-                [1.0, 0.0, 0.0],
+                [0.1, 0.0, 0.0],
                 [0.0, 1.0, 0.0],
                 [0.0, 0.0, 1.0],
             ],
-            "b": [0.0, 0.0, 0.0],
+            "b": [1, 0.0, 0.0],
         },
         "alpha_epsilon_mode_setup": {
             "alpha_group": "mid",

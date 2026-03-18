@@ -3,13 +3,13 @@
 ## Current Implementation Note
 
 - Current generator uses **3 latent characteristic axes**:
-  `latent_beta_mkt_state`, `latent_beta_smb_state`, `latent_beta_hml_state`
+  `latent_characteristic_1_state`, `latent_characteristic_2_state`, `latent_characteristic_3_state`
 - Observable characteristics are the aligned 3-axis diagnostics:
-  `characteristic_beta_mkt`, `characteristic_beta_smb`, `characteristic_beta_hml`
+  `characteristic_1`, `characteristic_2`, `characteristic_3`
 - Exposure mapping is matrix-based:
   `beta_t = A @ Z_t + b`
 - Default config uses `A = I_3` and `b = [0, 0, 0]`, so each latent axis maps one-to-one to one beta axis.
-- `mu_i` is the white-box true beta class center.
+- `mu_i` is the white-box fixed characteristic-class center.
 - Current csv outputs are:
   `{status}_{N}_{T}_panel_long.csv`, `{status}_{N}_{T}_price.csv`, `{status}_{N}_{T}_return.csv`
 
@@ -418,12 +418,12 @@ $$
 對應資料表欄位格式為：
 
 - `factor_df`: `[t, state, MKT, SMB, HML]`
-- `characteristic_df`: `[stock_id, t, characteristic_beta_mkt, characteristic_beta_smb, characteristic_beta_hml]`
+- `characteristic_df`: `[stock_id, t, characteristic_1, characteristic_2, characteristic_3]`
 - `beta_df`: `[stock_id, t, beta_mkt, beta_smb, beta_hml]`
 - `alpha_df`: `[stock_id, alpha]`
 - `epsilon_df`: `[stock_id, t, epsilon]`
 - `panel_long_df` 至少包含：
-  `[stock_id, t, state, characteristic_beta_mkt, characteristic_beta_smb, characteristic_beta_hml, alpha, beta_mkt, beta_smb, beta_hml, MKT, SMB, HML, epsilon, raw_return, return, price]`
+  `[stock_id, t, state, characteristic_1, characteristic_2, characteristic_3, alpha, beta_mkt, beta_smb, beta_hml, MKT, SMB, HML, epsilon, raw_return, return, price]`
 
 ---
 
@@ -515,12 +515,13 @@ $$
 \mathbf{Z}_{i,t}
 =
 \begin{bmatrix}
-Z_{i,t}^{(\mathrm{size})} \\
-Z_{i,t}^{(\mathrm{btp})}
+Z_{i,t}^{(1)} \\
+Z_{i,t}^{(2)} \\
+Z_{i,t}^{(3)}
 \end{bmatrix}
 \qquad
 \left(
-\mathbf{Z}_{i,t} \in \mathbb{R}^{2\times1}
+\mathbf{Z}_{i,t} \in \mathbb{R}^{3\times1}
 \right)
 $$
 
@@ -538,10 +539,10 @@ $$
 
 $$
 \left(
-\Omega_i \in \mathbb{R}^{2\times2},\;
-\boldsymbol{\mu}_i \in \mathbb{R}^{2\times1},\;
-\boldsymbol{\lambda}_i \in \mathbb{R}^{2\times1},\;
-\boldsymbol{\xi}_{i,t} \in \mathbb{R}^{2\times1}
+\Omega_i \in \mathbb{R}^{3\times3},\;
+\boldsymbol{\mu}_i \in \mathbb{R}^{3\times1},\;
+\boldsymbol{\lambda}_i \in \mathbb{R}^{3\times1},\;
+\boldsymbol{\xi}_{i,t} \in \mathbb{R}^{3\times1}
 \right)
 $$
 
@@ -560,8 +561,9 @@ $$
 =
 \operatorname{diag}
 \left(
-\omega_i^{(\mathrm{size})},
-\omega_i^{(\mathrm{btp})}
+\omega_i^{(1)},
+\omega_i^{(2)},
+\omega_i^{(3)}
 \right)
 $$
 
@@ -570,12 +572,13 @@ $$
 =
 \operatorname{diag}
 \left(
-(\sigma_{Z,i}^{(\mathrm{size})})^2,
-(\sigma_{Z,i}^{(\mathrm{btp})})^2
+(\sigma_{Z,i}^{(1)})^2,
+(\sigma_{Z,i}^{(2)})^2,
+(\sigma_{Z,i}^{(3)})^2
 \right)
 \qquad
 \left(
-\Sigma_{Z,i}\in\mathbb{R}^{2\times2}
+\Sigma_{Z,i}\in\mathbb{R}^{3\times3}
 \right)
 $$
 
@@ -583,8 +586,9 @@ $$
 \mathbf{C}_{i,t}^{\mathrm{obs}}
 =
 \begin{bmatrix}
-\mathrm{firm\_size}_{i,t} \\
-\mathrm{book\_to\_price}_{i,t}
+C_{i,t}^{(1)} \\
+C_{i,t}^{(2)} \\
+C_{i,t}^{(3)}
 \end{bmatrix}
 =
 \exp\!\left(
@@ -592,24 +596,18 @@ $$
 \right)
 \qquad
 \left(
-\mathbf{C}_{i,t}^{\mathrm{obs}} \in \mathbb{R}_{+}^{2\times1}
+\mathbf{C}_{i,t}^{\mathrm{obs}} \in \mathbb{R}_{+}^{3\times1}
 \right)
 $$
 
 $$
-\mathrm{firm\_size}_{i,t}
+C_{i,t}^{(j)}
 =
 \exp\!\left(
-Z_{i,t}^{(\mathrm{size})}
-\right)
-$$
-
-$$
-\mathrm{book\_to\_price}_{i,t}
-=
-\exp\!\left(
-Z_{i,t}^{(\mathrm{btp})}
-\right)
+Z_{i,t}^{(j)}
+\right),
+\qquad
+j=1,2,3
 $$
 
 $$
@@ -623,7 +621,7 @@ b_k
 k=1,2,3
 \qquad
 \left(
-\mathbf{a}_k \in \mathbb{R}^{2\times1},\;
+\mathbf{a}_k \in \mathbb{R}^{3\times1},\;
 \beta_{i,t,k},\, b_k \in \mathbb{R}
 \right)
 $$
@@ -653,6 +651,9 @@ P_{i,t}
 =
 P_{i,t-1}(1+r_{i,t}^{obs})
 $$
+
+
+
 
 註記: 帳面市值比 Book to Price Ratio = 帳面股東權益/市值
 
@@ -711,7 +712,7 @@ src/toy_ff_generator/main.py
 3. `{status}_{N}_{T}_panel_long.csv`
    - long panel 格式
    - 欄位至少包含：
-     `stock_id, t, state, characteristic_beta_mkt, characteristic_beta_smb, characteristic_beta_hml, alpha, beta_mkt, beta_smb, beta_hml, MKT, SMB, HML, epsilon, raw_return, return, price`
+     `stock_id, t, state, characteristic_1, characteristic_2, characteristic_3, alpha, beta_mkt, beta_smb, beta_hml, MKT, SMB, HML, epsilon, raw_return, return, price`
 
 4. `metadata.json`
    - 儲存本次模擬所使用的主要設定參數
