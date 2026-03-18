@@ -69,7 +69,12 @@ def test_main_pipeline_generates_panel_price_return_and_metadata_outputs(tmp_pat
     assert panel_df.loc[panel_df["stock_id"] == "stock_000", "mu"].unique().tolist() == [
         "(-0.5,-0.5,-0.5)"
     ]
-    assert panel_df["epsilon_variance"].round(10).tolist() == [0.02] * 162
+    expected_epsilon_variance = (
+        result["config"]["alpha_epsilon_mode_setup"]["epsilon_levels"]["mid"] * 100
+    )
+    assert panel_df["epsilon_variance"].tolist() == [f"{expected_epsilon_variance:.3f}%"] * 162
+    for column_name in ("alpha", "epsilon_variance", "MKT", "SMB", "HML", "epsilon", "raw_return", "return"):
+        assert panel_df[column_name].str.fullmatch(r"-?\d+\.\d{3}%").all()
 
     expected_return_wide = (
         result["panel_long_df"]

@@ -872,14 +872,14 @@
     "alpha_group": "mid",
     "epsilon_group": "mid",
     "alpha_levels": {
-      "low": -0.01,
-      "mid": 0.002,
-      "high": 0.01
+      "low": -0.0001,
+      "mid": 0.0002,
+      "high": 0.0003
     },
     "epsilon_levels": {
       "low": 0.01,
-      "mid": 0.02,
-      "high": 0.03
+      "mid": 0.025,
+      "high": 0.04
     },
     "per_stock_alpha_groups": [
       "mid",

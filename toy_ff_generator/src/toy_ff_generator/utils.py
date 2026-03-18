@@ -10,6 +10,17 @@ import pandas as pd
 
 from toy_ff_generator.characteristics import FIRM_CHARACTERISTIC_COLUMNS
 
+PANEL_LONG_PERCENT_COLUMNS = (
+    "alpha",
+    "epsilon_variance",
+    "MKT",
+    "SMB",
+    "HML",
+    "epsilon",
+    "raw_return",
+    "return",
+)
+
 
 def set_random_seed(seed: int) -> np.random.Generator:
     return np.random.default_rng(seed)
@@ -54,6 +65,16 @@ def build_firm_characteristics_excel_view(
     return excel_view
 
 
+def _format_panel_long_for_csv(panel_long_df: pd.DataFrame) -> pd.DataFrame:
+    formatted_df = panel_long_df.copy()
+    for column_name in PANEL_LONG_PERCENT_COLUMNS:
+        if column_name in formatted_df.columns:
+            formatted_df[column_name] = formatted_df[column_name].map(
+                lambda value: f"{float(value) * 100:.3f}%"
+            )
+    return formatted_df
+
+
 def save_outputs(
     panel_long_df: pd.DataFrame,
     output_dir: str | Path,
@@ -81,10 +102,11 @@ def save_outputs(
     returns_path = output_path / return_filename
     panel_path = output_path / panel_filename
     metadata_path = output_path / metadata_filename
+    panel_long_output_df = _format_panel_long_for_csv(panel_long_df)
 
     _write_csv_atomically(prices_wide, prices_path, index=True)
     _write_csv_atomically(returns_wide, returns_path, index=True)
-    _write_csv_atomically(panel_long_df, panel_path, index=False)
+    _write_csv_atomically(panel_long_output_df, panel_path, index=False)
     _write_text_atomically(
         metadata_path,
         json.dumps(dict(metadata), indent=2),
