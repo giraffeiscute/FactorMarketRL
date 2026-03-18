@@ -1,10 +1,12 @@
-"""Tests for validation around latent states and observable firm characteristics."""
+"""Tests for validation around latent states and observable characteristics."""
 
 import pandas as pd
 import pytest
 
 from toy_ff_generator.validation import (
     validate_alpha_epsilon_mode_setup,
+    validate_beta_class_setup,
+    validate_beta_df,
     validate_exposure_setup,
     validate_firm_characteristics_df,
     validate_latent_characteristic_setup,
@@ -12,39 +14,53 @@ from toy_ff_generator.validation import (
 )
 
 
-def test_validate_latent_characteristic_setup_requires_two_dimensional_shared_vectors() -> None:
+def test_validate_latent_characteristic_setup_requires_three_dimensional_shared_vectors() -> None:
     with pytest.raises(
         ValueError,
-        match=r"Omega must have shape \(2,\) for the latent state order",
+        match=r"Omega must have shape \(3,\) for the latent state order",
     ):
         validate_latent_characteristic_setup(
             N=3,
             latent_characteristic_setup={
                 "use_shared_latent_state_params": True,
                 "shared_params": {
-                    "Omega": [0.6, 0.4, 0.2],
-                    "mu_X": [0.0, 0.1],
-                    "lambda_X": [0.2, 0.1],
-                    "sigma_X": [0.3, 0.2],
-                    "X0": [0.0, 0.0],
+                    "Omega": [0.6, 0.4],
+                    "mu_Z": [0.0, 0.1, 0.2],
+                    "lambda_Z": [0.2, 0.1, 0.0],
+                    "sigma_Z": [0.3, 0.2, 0.1],
+                    "Z0": [0.0, 0.0, 0.0],
                 },
             },
         )
 
 
-def test_validate_exposure_setup_requires_two_dimensional_loading_vectors() -> None:
+def test_validate_exposure_setup_requires_three_dimensional_matrix_and_vector() -> None:
     with pytest.raises(
         ValueError,
-        match=r"a_hml must have shape \(2,\) for the latent state order",
+        match=r"A must have shape \(3, 3\)",
     ):
         validate_exposure_setup(
             {
-                "a_mkt": [0.0, 0.0],
-                "a_smb": [-1.0, 0.0],
-                "a_hml": [0.0, 1.0, 0.0],
-                "b_mkt": 1.0,
-                "b_smb": 0.0,
-                "b_hml": 0.0,
+                "A": [
+                    [1.0, 0.0],
+                    [0.0, 1.0],
+                ],
+                "b": [0.0, 0.0, 0.0],
+            }
+        )
+
+
+def test_validate_beta_class_setup_requires_low_mid_high_centers() -> None:
+    with pytest.raises(
+        ValueError,
+        match=r"class_centers must define",
+    ):
+        validate_beta_class_setup(
+            {
+                "class_centers": {
+                    "low": -0.5,
+                    "mid": 0.0,
+                }
             }
         )
 
@@ -59,30 +75,28 @@ def test_validate_latent_state_df_requires_latent_columns() -> None:
                 {
                     "stock_id": ["stock_000"],
                     "t": ["t_0"],
-                    "firm_size": [1.0],
-                    "book_to_price": [0.0],
+                    "characteristic_beta_mkt": [1.0],
+                    "characteristic_beta_smb": [0.0],
+                    "characteristic_beta_hml": [0.1],
                 }
             ),
             expected_rows=1,
         )
 
 
-def test_validate_firm_characteristics_df_requires_positive_observable_values() -> None:
-    with pytest.raises(
-        ValueError,
-        match=r"Observable firm characteristics must be strictly positive",
-    ):
-        validate_firm_characteristics_df(
-            firm_characteristics_df=pd.DataFrame(
-                {
-                    "stock_id": ["stock_000"],
-                    "t": ["t_0"],
-                    "firm_size": [1.0],
-                    "book_to_price": [0.0],
-                }
-            ),
-            expected_rows=1,
-        )
+def test_validate_firm_characteristics_df_accepts_three_axis_values() -> None:
+    validate_firm_characteristics_df(
+        firm_characteristics_df=pd.DataFrame(
+            {
+                "stock_id": ["stock_000"],
+                "t": ["t_0"],
+                "characteristic_beta_mkt": [1.0],
+                "characteristic_beta_smb": [0.0],
+                "characteristic_beta_hml": [-0.5],
+            }
+        ),
+        expected_rows=1,
+    )
 
 
 def test_validate_alpha_epsilon_mode_setup_rejects_unknown_group() -> None:
@@ -105,4 +119,22 @@ def test_validate_alpha_epsilon_mode_setup_rejects_unknown_group() -> None:
                     "high": 0.03,
                 },
             }
+        )
+
+
+def test_validate_beta_df_rejects_null_beta_values() -> None:
+    with pytest.raises(
+        ValueError,
+        match=r"beta_df must not contain null values",
+    ):
+        validate_beta_df(
+            beta_df=pd.DataFrame(
+                {
+                    "stock_id": ["stock_000"],
+                    "t": ["t_0"],
+                    "beta_mkt": [1.0],
+                    "beta_smb": [None],
+                    "beta_hml": [0.5],
+                }
+            )
         )

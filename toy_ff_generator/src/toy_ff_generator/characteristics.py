@@ -1,14 +1,4 @@
-"""
-這個模組負責生成 latent characteristic state，並映射成可觀察的 firm characteristics。
-
-內部 latent state 順序固定為：
-- X[:, 0] = latent_size_state
-- X[:, 1] = latent_book_to_price_state
-
-對外可觀察 firm characteristics 順序固定為：
-- firm_size = exp(latent_size_state)
-- book_to_price = exp(latent_book_to_price_state)
-"""
+"""Latent characteristic states aligned one-to-one with the three beta axes."""
 
 from __future__ import annotations
 
@@ -17,18 +7,34 @@ from typing import Mapping, Sequence
 import numpy as np
 import pandas as pd
 
-LATENT_STATE_NAMES = ("latent_size_state", "latent_book_to_price_state")
-FIRM_CHARACTERISTIC_NAMES = ("firm_size", "book_to_price")
+LATENT_STATE_NAMES = (
+    "latent_beta_mkt_state",
+    "latent_beta_smb_state",
+    "latent_beta_hml_state",
+)
+FIRM_CHARACTERISTIC_NAMES = (
+    "characteristic_beta_mkt",
+    "characteristic_beta_smb",
+    "characteristic_beta_hml",
+)
 LATENT_STATE_COLUMNS = list(LATENT_STATE_NAMES)
 FIRM_CHARACTERISTIC_COLUMNS = list(FIRM_CHARACTERISTIC_NAMES)
 LATENT_STATE_DIM = len(LATENT_STATE_COLUMNS)
 
 
-def _shared_vector_to_named_columns(prefix: str, names: Sequence[str], vector: np.ndarray) -> dict[str, float]:
+def _shared_vector_to_named_columns(
+    prefix: str,
+    names: Sequence[str],
+    vector: np.ndarray,
+) -> dict[str, float]:
     return {f"{prefix}_{name}": float(vector[idx]) for idx, name in enumerate(names)}
 
 
-def _matrix_to_named_columns(prefix: str, names: Sequence[str], matrix: np.ndarray) -> dict[str, np.ndarray]:
+def _matrix_to_named_columns(
+    prefix: str,
+    names: Sequence[str],
+    matrix: np.ndarray,
+) -> dict[str, np.ndarray]:
     return {f"{prefix}_{name}": matrix[:, idx] for idx, name in enumerate(names)}
 
 
@@ -40,8 +46,6 @@ def _coerce_shared_latent_vector(
     shared_params: Mapping[str, Sequence[float]],
     key: str,
 ) -> np.ndarray:
-    """把 shared latent state 參數轉成長度 2 向量。"""
-
     vector = np.asarray(shared_params[key], dtype=float)
     if vector.shape != (LATENT_STATE_DIM,):
         raise ValueError(
@@ -55,8 +59,6 @@ def _coerce_per_stock_latent_matrix(
     per_stock_params: Mapping[str, Sequence[Sequence[float]]],
     key: str,
 ) -> np.ndarray:
-    """把 per-stock latent state 參數轉成 shape (N, 2) 的矩陣。"""
-
     matrix = np.asarray(per_stock_params[key], dtype=float)
     if matrix.ndim != 2 or matrix.shape[1] != LATENT_STATE_DIM:
         raise ValueError(
@@ -72,8 +74,6 @@ def _build_latent_state_param_table(
     shared_params: Mapping[str, Sequence[float]] | None,
     per_stock_params: Mapping[str, Sequence[Sequence[float]]] | None,
 ) -> pd.DataFrame:
-    """建立每支股票對應的 latent state 參數表。"""
-
     stock_count = len(stock_ids)
 
     if use_shared_latent_state_params:
@@ -83,10 +83,10 @@ def _build_latent_state_param_table(
             )
 
         omega = _coerce_shared_latent_vector(shared_params, "Omega")
-        mu = _coerce_shared_latent_vector(shared_params, "mu_X")
-        lambda_vector = _coerce_shared_latent_vector(shared_params, "lambda_X")
-        sigma = _coerce_shared_latent_vector(shared_params, "sigma_X")
-        x0 = _coerce_shared_latent_vector(shared_params, "X0")
+        mu = _coerce_shared_latent_vector(shared_params, "mu_Z")
+        lambda_vector = _coerce_shared_latent_vector(shared_params, "lambda_Z")
+        sigma = _coerce_shared_latent_vector(shared_params, "sigma_Z")
+        z0 = _coerce_shared_latent_vector(shared_params, "Z0")
 
         return pd.DataFrame(
             {
@@ -94,8 +94,8 @@ def _build_latent_state_param_table(
                 **_shared_vector_to_named_columns("Omega", LATENT_STATE_NAMES, omega),
                 **_shared_vector_to_named_columns("mu", LATENT_STATE_NAMES, mu),
                 **_shared_vector_to_named_columns("lambda", LATENT_STATE_NAMES, lambda_vector),
-                **_shared_vector_to_named_columns("sigma_X", LATENT_STATE_NAMES, sigma),
-                **_shared_vector_to_named_columns("X0", LATENT_STATE_NAMES, x0),
+                **_shared_vector_to_named_columns("sigma_Z", LATENT_STATE_NAMES, sigma),
+                **_shared_vector_to_named_columns("Z0", LATENT_STATE_NAMES, z0),
             }
         )
 
@@ -107,15 +107,15 @@ def _build_latent_state_param_table(
     omega = _coerce_per_stock_latent_matrix(per_stock_params, "Omega_i")
     mu = _coerce_per_stock_latent_matrix(per_stock_params, "mu_i")
     lambda_vector = _coerce_per_stock_latent_matrix(per_stock_params, "lambda_i")
-    sigma = _coerce_per_stock_latent_matrix(per_stock_params, "sigma_X_i")
-    x0 = _coerce_per_stock_latent_matrix(per_stock_params, "X0_i")
+    sigma = _coerce_per_stock_latent_matrix(per_stock_params, "sigma_Z_i")
+    z0 = _coerce_per_stock_latent_matrix(per_stock_params, "Z0_i")
 
     for name, matrix in (
         ("Omega_i", omega),
         ("mu_i", mu),
         ("lambda_i", lambda_vector),
-        ("sigma_X_i", sigma),
-        ("X0_i", x0),
+        ("sigma_Z_i", sigma),
+        ("Z0_i", z0),
     ):
         if matrix.shape[0] != stock_count:
             raise ValueError(
@@ -128,14 +128,14 @@ def _build_latent_state_param_table(
             **_matrix_to_named_columns("Omega", LATENT_STATE_NAMES, omega),
             **_matrix_to_named_columns("mu", LATENT_STATE_NAMES, mu),
             **_matrix_to_named_columns("lambda", LATENT_STATE_NAMES, lambda_vector),
-            **_matrix_to_named_columns("sigma_X", LATENT_STATE_NAMES, sigma),
-            **_matrix_to_named_columns("X0", LATENT_STATE_NAMES, x0),
+            **_matrix_to_named_columns("sigma_Z", LATENT_STATE_NAMES, sigma),
+            **_matrix_to_named_columns("Z0", LATENT_STATE_NAMES, z0),
         }
     )
 
 
 def latent_to_firm_characteristics(latent_state_values: np.ndarray) -> np.ndarray:
-    """把 latent state 映射成恆為正的 observable firm characteristics。"""
+    """Expose the three latent beta-axis states as observable characteristics."""
 
     latent_state_array = np.asarray(latent_state_values, dtype=float)
     if latent_state_array.shape[-1] != LATENT_STATE_DIM:
@@ -143,14 +143,10 @@ def latent_to_firm_characteristics(latent_state_values: np.ndarray) -> np.ndarra
             f"latent_state_values must have trailing dimension {LATENT_STATE_DIM}. "
             f"Received {latent_state_array.shape}."
         )
-    return np.exp(latent_state_array)
+    return latent_state_array.copy()
 
 
-def state_to_firm_characteristics(
-    latent_state_df: pd.DataFrame,
-) -> pd.DataFrame:
-    """把 latent state DataFrame 轉成 observable firm characteristics DataFrame。"""
-
+def state_to_firm_characteristics(latent_state_df: pd.DataFrame) -> pd.DataFrame:
     missing_columns = [
         column_name
         for column_name in LATENT_STATE_COLUMNS
@@ -181,7 +177,7 @@ def generate_latent_characteristic_states(
     shared_params: Mapping[str, Sequence[float]] | None = None,
     per_stock_params: Mapping[str, Sequence[Sequence[float]]] | None = None,
 ) -> pd.DataFrame:
-    """生成 latent state DataFrame，欄位為 `[stock_id, t, latent_size_state, latent_book_to_price_state]`。"""
+    """Generate latent beta-axis state paths."""
 
     param_df = _build_latent_state_param_table(
         stock_ids=stock_ids,
@@ -192,15 +188,15 @@ def generate_latent_characteristic_states(
 
     rows: list[dict[str, float | str]] = []
     for row in param_df.itertuples(index=False):
-        previous = _row_vector(row, "X0", LATENT_STATE_NAMES)
+        previous = _row_vector(row, "Z0", LATENT_STATE_NAMES)
         omega = _row_vector(row, "Omega", LATENT_STATE_NAMES)
         mu = _row_vector(row, "mu", LATENT_STATE_NAMES)
         lambda_vector = _row_vector(row, "lambda", LATENT_STATE_NAMES)
-        sigma = _row_vector(row, "sigma_X", LATENT_STATE_NAMES)
+        sigma = _row_vector(row, "sigma_Z", LATENT_STATE_NAMES)
 
         for time_label, state in zip(time_columns, state_sequence, strict=True):
             innovation = rng.normal(loc=0.0, scale=sigma, size=LATENT_STATE_DIM)
-            current = omega * previous + mu + lambda_vector * state + innovation
+            current = mu + omega * (previous - mu) + lambda_vector * state + innovation
             rows.append(
                 {
                     "stock_id": row.stock_id,

@@ -14,6 +14,7 @@ from toy_ff_generator.characteristics import (
 
 STATE_VALUES = (-1, 0, 1)
 ALPHA_EPSILON_GROUPS = ("low", "mid", "high")
+BETA_COLUMNS = ("beta_mkt", "beta_smb", "beta_hml")
 
 
 def _latent_state_shape_message(expected_shape: tuple[int, ...]) -> str:
@@ -25,7 +26,7 @@ def _latent_state_shape_message(expected_shape: tuple[int, ...]) -> str:
 
 def _observable_characteristic_shape_message(expected_shape: tuple[int, ...]) -> str:
     return (
-        f"must have shape {expected_shape} for the observable firm characteristic order "
+        f"must have shape {expected_shape} for the observable characteristic order "
         f"{FIRM_CHARACTERISTIC_COLUMNS}"
     )
 
@@ -33,6 +34,32 @@ def _observable_characteristic_shape_message(expected_shape: tuple[int, ...]) ->
 def _validate_positive(name: str, value: float) -> None:
     if value <= 0:
         raise ValueError(f"{name} must be > 0. Received {value}.")
+
+
+def _validate_required_columns(
+    df: pd.DataFrame,
+    *,
+    name: str,
+    required_columns: Sequence[str],
+) -> None:
+    missing_columns = [
+        column_name for column_name in required_columns if column_name not in df.columns
+    ]
+    if missing_columns:
+        raise ValueError(
+            f"{name} is missing required columns {missing_columns}. "
+            f"Expected at least {list(required_columns)}."
+        )
+
+
+def _validate_required_columns_not_null(
+    df: pd.DataFrame,
+    *,
+    name: str,
+    required_columns: Sequence[str],
+) -> None:
+    if df[list(required_columns)].isna().any().any():
+        raise ValueError(f"{name} must not contain null values in {list(required_columns)}.")
 
 
 def _validate_state_values(state_values: Sequence[int], name: str) -> None:
@@ -179,6 +206,27 @@ def validate_factor_setup(factor_vector_ar_setup: Mapping[str, object]) -> None:
     _validate_covariance_matrix("Sigma_X_bull", factor_vector_ar_setup["Sigma_X_bull"], (3, 3))
 
 
+def validate_beta_class_setup(beta_class_setup: Mapping[str, object]) -> None:
+    class_centers = beta_class_setup.get("class_centers")
+    if not isinstance(class_centers, Mapping):
+        raise ValueError("beta_class_setup['class_centers'] must be a mapping.")
+
+    missing_groups = [
+        group_name for group_name in ALPHA_EPSILON_GROUPS if group_name not in class_centers
+    ]
+    if missing_groups:
+        raise ValueError(
+            f"class_centers must define {list(ALPHA_EPSILON_GROUPS)}. Missing {missing_groups}."
+        )
+
+    for group_name in ALPHA_EPSILON_GROUPS:
+        scalar_value = np.asarray(class_centers[group_name], dtype=float)
+        if scalar_value.shape != ():
+            raise ValueError(
+                f"class_centers[{group_name!r}] must be a scalar. Received shape {scalar_value.shape}."
+            )
+
+
 def validate_latent_characteristic_setup(
     N: int,
     latent_characteristic_setup: Mapping[str, object],
@@ -192,18 +240,18 @@ def validate_latent_characteristic_setup(
             )
 
         omega = _coerce_array(shared_params["Omega"], "Omega")
-        mu = _coerce_array(shared_params["mu_X"], "mu_X")
-        lambda_vector = _coerce_array(shared_params["lambda_X"], "lambda_X")
-        sigma = _coerce_array(shared_params["sigma_X"], "sigma_X")
-        x0 = _coerce_array(shared_params["X0"], "X0")
+        mu = _coerce_array(shared_params["mu_Z"], "mu_Z")
+        lambda_vector = _coerce_array(shared_params["lambda_Z"], "lambda_Z")
+        sigma = _coerce_array(shared_params["sigma_Z"], "sigma_Z")
+        z0 = _coerce_array(shared_params["Z0"], "Z0")
 
         _validate_latent_state_array_shape("Omega", omega, (LATENT_STATE_DIM,))
-        _validate_latent_state_array_shape("mu_X", mu, (LATENT_STATE_DIM,))
-        _validate_latent_state_array_shape("lambda_X", lambda_vector, (LATENT_STATE_DIM,))
-        _validate_latent_state_array_shape("sigma_X", sigma, (LATENT_STATE_DIM,))
-        _validate_latent_state_array_shape("X0", x0, (LATENT_STATE_DIM,))
+        _validate_latent_state_array_shape("mu_Z", mu, (LATENT_STATE_DIM,))
+        _validate_latent_state_array_shape("lambda_Z", lambda_vector, (LATENT_STATE_DIM,))
+        _validate_latent_state_array_shape("sigma_Z", sigma, (LATENT_STATE_DIM,))
+        _validate_latent_state_array_shape("Z0", z0, (LATENT_STATE_DIM,))
         if np.any(sigma <= 0):
-            raise ValueError("Every component of sigma_X must be > 0.")
+            raise ValueError("Every component of sigma_Z must be > 0.")
         if np.any(np.abs(omega) >= 1.0):
             raise ValueError("Every component of Omega must satisfy abs(Omega) < 1.")
         return
@@ -217,30 +265,32 @@ def validate_latent_characteristic_setup(
     omega = _coerce_array(per_stock_params["Omega_i"], "Omega_i")
     mu = _coerce_array(per_stock_params["mu_i"], "mu_i")
     lambda_vector = _coerce_array(per_stock_params["lambda_i"], "lambda_i")
-    sigma = _coerce_array(per_stock_params["sigma_X_i"], "sigma_X_i")
-    x0 = _coerce_array(per_stock_params["X0_i"], "X0_i")
+    sigma = _coerce_array(per_stock_params["sigma_Z_i"], "sigma_Z_i")
+    z0 = _coerce_array(per_stock_params["Z0_i"], "Z0_i")
 
     latent_matrix_shape = (N, LATENT_STATE_DIM)
     _validate_latent_state_array_shape("Omega_i", omega, latent_matrix_shape)
     _validate_latent_state_array_shape("mu_i", mu, latent_matrix_shape)
     _validate_latent_state_array_shape("lambda_i", lambda_vector, latent_matrix_shape)
-    _validate_latent_state_array_shape("sigma_X_i", sigma, latent_matrix_shape)
-    _validate_latent_state_array_shape("X0_i", x0, latent_matrix_shape)
+    _validate_latent_state_array_shape("sigma_Z_i", sigma, latent_matrix_shape)
+    _validate_latent_state_array_shape("Z0_i", z0, latent_matrix_shape)
     if np.any(sigma <= 0):
-        raise ValueError("Every component of sigma_X_i must be > 0.")
+        raise ValueError("Every component of sigma_Z_i must be > 0.")
     if np.any(np.abs(omega) >= 1.0):
         raise ValueError("Every component of Omega_i must satisfy abs(Omega_i) < 1.")
 
 
 def validate_exposure_setup(exposure_setup: Mapping[str, object]) -> None:
-    for vector_name in ("a_mkt", "a_smb", "a_hml"):
-        vector = _coerce_array(exposure_setup[vector_name], vector_name)
-        _validate_latent_state_array_shape(vector_name, vector, (LATENT_STATE_DIM,))
-
-    for scalar_name in ("b_mkt", "b_smb", "b_hml"):
-        scalar_value = np.asarray(exposure_setup[scalar_name], dtype=float)
-        if scalar_value.shape != ():
-            raise ValueError(f"{scalar_name} must be a scalar. Received shape {scalar_value.shape}.")
+    exposure_matrix = _coerce_array(exposure_setup["A"], "A")
+    intercept_vector = _coerce_array(exposure_setup["b"], "b")
+    if exposure_matrix.shape != (LATENT_STATE_DIM, LATENT_STATE_DIM):
+        raise ValueError(
+            f"A must have shape ({LATENT_STATE_DIM}, {LATENT_STATE_DIM}). Received {exposure_matrix.shape}."
+        )
+    if intercept_vector.shape != (LATENT_STATE_DIM,):
+        raise ValueError(
+            f"b must have shape ({LATENT_STATE_DIM},). Received {intercept_vector.shape}."
+        )
 
 
 def validate_latent_state_df(
@@ -299,11 +349,6 @@ def validate_firm_characteristics_df(
         observable_matrix,
         (expected_rows, LATENT_STATE_DIM),
     )
-    if np.any(observable_matrix <= 0):
-        raise ValueError(
-            "Observable firm characteristics must be strictly positive. "
-            "Received non-positive firm_size/book_to_price values."
-        )
 
 
 def _validate_group_levels(
@@ -398,6 +443,7 @@ def validate_simulation_inputs(
     T: int,
     market_state_setup: Mapping[str, object],
     factor_vector_ar_setup: Mapping[str, object],
+    beta_class_setup: Mapping[str, object],
     latent_characteristic_setup: Mapping[str, object],
     exposure_setup: Mapping[str, object],
     alpha_epsilon_mode_setup: Mapping[str, object],
@@ -410,6 +456,7 @@ def validate_simulation_inputs(
 
     validate_market_state_setup(T=T, market_state_setup=market_state_setup)
     validate_factor_setup(factor_vector_ar_setup=factor_vector_ar_setup)
+    validate_beta_class_setup(beta_class_setup=beta_class_setup)
     validate_latent_characteristic_setup(N=N, latent_characteristic_setup=latent_characteristic_setup)
     validate_exposure_setup(exposure_setup=exposure_setup)
     validate_alpha_epsilon_mode_setup(alpha_epsilon_mode_setup=alpha_epsilon_mode_setup)
@@ -430,3 +477,31 @@ def validate_panel_row_count(panel_df: pd.DataFrame, expected_rows: int) -> None
             "Merged panel row count does not match expectation. "
             f"Expected {expected_rows}, received {len(panel_df)}."
         )
+
+
+def validate_beta_df(
+    beta_df: pd.DataFrame,
+    expected_rows: int | None = None,
+) -> None:
+    required_columns = ("stock_id", "t", *BETA_COLUMNS)
+    if beta_df.empty:
+        raise ValueError("beta_df must not be empty.")
+
+    _validate_required_columns(
+        beta_df,
+        name="beta_df",
+        required_columns=required_columns,
+    )
+    _validate_required_columns_not_null(
+        beta_df,
+        name="beta_df",
+        required_columns=required_columns,
+    )
+
+    if expected_rows is not None:
+        validate_component_row_count(
+            name="beta_df",
+            df=beta_df,
+            expected_rows=expected_rows,
+        )
+

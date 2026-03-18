@@ -42,6 +42,7 @@ from toy_ff_generator.utils import (
     set_random_seed,
 )
 from toy_ff_generator.validation import (
+    validate_beta_df,
     validate_component_row_count,
     validate_firm_characteristics_df,
     validate_latent_state_df,
@@ -120,6 +121,17 @@ def _build_price_filename(
     stock_count = int(simulation_setup["N"])
     time_count = int(simulation_setup["T"])
     return f"{state_name}_{stock_count}_{time_count}_price.csv"
+
+
+def _build_return_filename(
+    state_sequence: list[int],
+    market_state_setup: Mapping[str, Any],
+    simulation_setup: Mapping[str, Any],
+) -> str:
+    state_name = _format_state_for_filename(state_sequence, market_state_setup)
+    stock_count = int(simulation_setup["N"])
+    time_count = int(simulation_setup["T"])
+    return f"{state_name}_{stock_count}_{time_count}_return.csv"
 
 
 def _build_metadata_filename(
@@ -201,6 +213,7 @@ def run_simulation(
         T=simulation_setup["T"],
         market_state_setup={**market_state_setup, "state_sequence": state_sequence},
         factor_vector_ar_setup=factor_vector_ar_setup,
+        beta_class_setup=config["beta_class_setup"],
         latent_characteristic_setup=latent_characteristic_setup,
         exposure_setup=exposure_setup,
         alpha_epsilon_mode_setup=alpha_epsilon_mode_setup,
@@ -246,16 +259,11 @@ def run_simulation(
 
     beta_df = generate_exposures(
         latent_state_df=latent_state_df,
-        a_mkt=exposure_setup["a_mkt"],
-        b_mkt=exposure_setup["b_mkt"],
-        a_smb=exposure_setup["a_smb"],
-        b_smb=exposure_setup["b_smb"],
-        a_hml=exposure_setup["a_hml"],
-        b_hml=exposure_setup["b_hml"],
+        A=exposure_setup["A"],
+        b=exposure_setup["b"],
     )
-    validate_component_row_count(
-        name="beta_df",
-        df=beta_df,
+    validate_beta_df(
+        beta_df=beta_df,
         expected_rows=simulation_setup["N"] * simulation_setup["T"],
     )
 
@@ -337,6 +345,11 @@ def run_simulation(
         market_state_setup=market_state_setup,
         simulation_setup=simulation_setup,
     )
+    return_filename = _build_return_filename(
+        state_sequence=state_sequence,
+        market_state_setup=market_state_setup,
+        simulation_setup=simulation_setup,
+    )
     metadata_filename = _build_metadata_filename(
         state_sequence=state_sequence,
         market_state_setup=market_state_setup,
@@ -345,10 +358,10 @@ def run_simulation(
 
     output_paths = save_outputs(
         panel_long_df=panel_long_df,
-        firm_characteristics_df=firm_characteristics_df,
         output_dir=output_setup["output_dir"],
         panel_filename=panel_filename,
         price_filename=price_filename,
+        return_filename=return_filename,
         metadata_filename=metadata_filename,
         time_columns=time_columns,
         metadata=config,

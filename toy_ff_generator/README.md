@@ -1,5 +1,18 @@
 # Toy FF Generator
 
+## Current Implementation Note
+
+- Current generator uses **3 latent characteristic axes**:
+  `latent_beta_mkt_state`, `latent_beta_smb_state`, `latent_beta_hml_state`
+- Observable characteristics are the aligned 3-axis diagnostics:
+  `characteristic_beta_mkt`, `characteristic_beta_smb`, `characteristic_beta_hml`
+- Exposure mapping is matrix-based:
+  `beta_t = A @ Z_t + b`
+- Default config uses `A = I_3` and `b = [0, 0, 0]`, so each latent axis maps one-to-one to one beta axis.
+- `mu_i` is the white-box true beta class center.
+- Current csv outputs are:
+  `{status}_{N}_{T}_panel_long.csv`, `{status}_{N}_{T}_price.csv`, `{status}_{N}_{T}_return.csv`
+
 這個專案是一個透明、可檢查、可解釋的 toy data generating process（DGP），用來模擬股票報酬與價格。它的用途是做檢查、除錯與實驗，不是實盤交易策略。
 
 # 模型生成流程
@@ -297,12 +310,8 @@ $$
 
 對應需要設定：
 
-- `a_mkt`：長度 2
-- `a_smb`：長度 2
-- `a_hml`：長度 2
-- `b_mkt`
-- `b_smb`
-- `b_hml`
+- `A`：`3 x 3` exposure mapping matrix
+- `b`：長度 3 的 beta intercept vector
 
 分別對應：
 
@@ -409,12 +418,12 @@ $$
 對應資料表欄位格式為：
 
 - `factor_df`: `[t, state, MKT, SMB, HML]`
-- `characteristic_df`: `[stock_id, t, C1, C2]`，其中 `C1=size`、`C2=book_to_price`
+- `characteristic_df`: `[stock_id, t, characteristic_beta_mkt, characteristic_beta_smb, characteristic_beta_hml]`
 - `beta_df`: `[stock_id, t, beta_mkt, beta_smb, beta_hml]`
 - `alpha_df`: `[stock_id, alpha]`
 - `epsilon_df`: `[stock_id, t, epsilon]`
 - `panel_long_df` 至少包含：
-  `[stock_id, t, state, C1, C2, alpha, beta_mkt, beta_smb, beta_hml, MKT, SMB, HML, epsilon, raw_return, return, price]`
+  `[stock_id, t, state, characteristic_beta_mkt, characteristic_beta_smb, characteristic_beta_hml, alpha, beta_mkt, beta_smb, beta_hml, MKT, SMB, HML, epsilon, raw_return, return, price]`
 
 ---
 
@@ -687,22 +696,22 @@ src/toy_ff_generator/main.py
 
 程式會在 `outputs/` 目錄下輸出 4 個檔案：
 
-1. `returns.csv`
+1. `{status}_{N}_{T}_return.csv`
    - `N x T` 的 wide matrix
    - 列為 `stock_id`
    - 欄為 `t_0, t_1, ..., t_{T-1}`
    - 值為 clipping 後的 return
 
-2. `prices.csv`
+2. `{status}_{N}_{T}_price.csv`
    - `N x T` 的 wide matrix
    - 列為 `stock_id`
    - 欄為 `t_0, t_1, ..., t_{T-1}`
    - 值為由 clipping 後 return 遞推得到的價格
 
-3. `panel_long.csv`
+3. `{status}_{N}_{T}_panel_long.csv`
    - long panel 格式
    - 欄位至少包含：
-     `stock_id, t, state, C1, C2, alpha, beta_mkt, beta_smb, beta_hml, MKT, SMB, HML, epsilon, raw_return, return, price`
+     `stock_id, t, state, characteristic_beta_mkt, characteristic_beta_smb, characteristic_beta_hml, alpha, beta_mkt, beta_smb, beta_hml, MKT, SMB, HML, epsilon, raw_return, return, price`
 
 4. `metadata.json`
    - 儲存本次模擬所使用的主要設定參數

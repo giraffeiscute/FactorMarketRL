@@ -1,10 +1,3 @@
-"""
-?芋蝯?游?獢?函?撌亙?賢??撓?箏?瑼撘?
-?梯????餅??渡???
-1. 銝?砍極??2. ?拚頧?撌亙
-3. 頛詨摮?撌亙
-"""
-
 from __future__ import annotations
 
 import json
@@ -19,26 +12,18 @@ from toy_ff_generator.characteristics import FIRM_CHARACTERISTIC_COLUMNS
 
 
 def set_random_seed(seed: int) -> np.random.Generator:
-    """撱箇??舫??曄? NumPy 鈭?Ｙ??具?"""
-
     return np.random.default_rng(seed)
 
 
 def make_stock_ids(n: int) -> list[str]:
-    """撱箇?璅??蟡其誨??靘? `stock_000`??"""
-
     return [f"stock_{idx:03d}" for idx in range(n)]
 
 
 def make_time_columns(t_count: int) -> list[str]:
-    """撱箇?璅?????雿?蝔梧?靘? `t_0`?t_1`??"""
-
     return [f"t_{idx}" for idx in range(t_count)]
 
 
 def ensure_output_dir(output_dir: str | Path) -> Path:
-    """蝣箄?頛詨鞈?憭曉??剁??乩?摮撠勗遣蝡?"""
-
     path = Path(output_dir)
     path.mkdir(parents=True, exist_ok=True)
     return path
@@ -51,8 +36,6 @@ def pivot_to_wide_matrix(
     index_col: str = "stock_id",
     column_col: str = "t",
 ) -> pd.DataFrame:
-    """??long panel 頧? `?∠巨 x ??` ???撘?"""
-
     wide_df = df.pivot(index=index_col, columns=column_col, values=value_col)
     wide_df = wide_df.reindex(columns=list(time_columns))
     wide_df.index.name = index_col
@@ -62,8 +45,6 @@ def pivot_to_wide_matrix(
 def build_firm_characteristics_excel_view(
     firm_characteristics_df: pd.DataFrame,
 ) -> pd.DataFrame:
-    """撱箇?蝯?Excel 雿輻??firm characteristics row-oriented 閬???"""
-
     excel_view = (
         firm_characteristics_df.set_index(["stock_id", "t"])[FIRM_CHARACTERISTIC_COLUMNS]
         .T
@@ -75,17 +56,14 @@ def build_firm_characteristics_excel_view(
 
 def save_outputs(
     panel_long_df: pd.DataFrame,
-    firm_characteristics_df: pd.DataFrame,
     output_dir: str | Path,
     panel_filename: str,
     price_filename: str,
+    return_filename: str,
     metadata_filename: str,
     time_columns: Sequence[str],
     metadata: Mapping[str, Any],
 ) -> dict[str, Path | None]:
-    """????瘙?頛詨瑼神?交?摰??冗??"""
-
-    _ = firm_characteristics_df
     output_path = ensure_output_dir(output_dir)
 
     prices_wide = pivot_to_wide_matrix(
@@ -93,12 +71,19 @@ def save_outputs(
         value_col="price",
         time_columns=time_columns,
     )
+    returns_wide = pivot_to_wide_matrix(
+        df=panel_long_df,
+        value_col="return",
+        time_columns=time_columns,
+    )
 
     prices_path = output_path / price_filename
+    returns_path = output_path / return_filename
     panel_path = output_path / panel_filename
     metadata_path = output_path / metadata_filename
 
     _write_csv_atomically(prices_wide, prices_path, index=True)
+    _write_csv_atomically(returns_wide, returns_path, index=True)
     _write_csv_atomically(panel_long_df, panel_path, index=False)
     _write_text_atomically(
         metadata_path,
@@ -107,6 +92,7 @@ def save_outputs(
 
     return {
         "prices": prices_path,
+        "returns": returns_path,
         "panel_long": panel_path,
         "metadata": metadata_path,
         "excel_workbook": None,
@@ -114,8 +100,6 @@ def save_outputs(
 
 
 def _write_csv_atomically(df: pd.DataFrame, path: Path, index: bool) -> None:
-    """?神?怠?瑼???迤撘?獢??? Windows 閬神????"""
-
     temp_path = path.with_name(f"{path.name}.tmp")
     try:
         df.to_csv(temp_path, index=index)
@@ -130,8 +114,6 @@ def _write_csv_atomically(df: pd.DataFrame, path: Path, index: bool) -> None:
 
 
 def _write_text_atomically(path: Path, content: str) -> None:
-    """?神?怠???瑼???迤撘?獢?"""
-
     temp_path = path.with_name(f"{path.name}.tmp")
     try:
         temp_path.write_text(content, encoding="utf-8")

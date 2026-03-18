@@ -1,4 +1,4 @@
-"""Tests for latent characteristic state generation and positive mapping."""
+"""Tests for three-dimensional latent characteristic state generation."""
 
 import numpy as np
 
@@ -9,7 +9,7 @@ from toy_ff_generator.characteristics import (
 from toy_ff_generator.utils import make_stock_ids, make_time_columns, set_random_seed
 
 
-def test_generate_latent_states_and_positive_firm_characteristics() -> None:
+def test_generate_latent_states_and_observable_characteristics_follow_centered_rule() -> None:
     stock_ids = make_stock_ids(2)
     time_columns = make_time_columns(3)
 
@@ -19,11 +19,11 @@ def test_generate_latent_states_and_positive_firm_characteristics() -> None:
         state_sequence=[0, 1, -1],
         use_shared_latent_state_params=True,
         shared_params={
-            "Omega": [0.5, 0.5],
-            "mu_X": [1.0, 0.0],
-            "lambda_X": [0.1, 0.2],
-            "sigma_X": [0.0, 0.0],
-            "X0": [2.0, 0.0],
+            "Omega": [0.5, 0.25, 0.0],
+            "mu_Z": [1.0, 0.0, -1.0],
+            "lambda_Z": [0.1, 0.2, 0.3],
+            "sigma_Z": [0.0, 0.0, 0.0],
+            "Z0": [2.0, 0.0, 1.0],
         },
         rng=set_random_seed(7),
     )
@@ -34,32 +34,48 @@ def test_generate_latent_states_and_positive_firm_characteristics() -> None:
     assert list(latent_state_df.columns) == [
         "stock_id",
         "t",
-        "latent_size_state",
-        "latent_book_to_price_state",
+        "latent_beta_mkt_state",
+        "latent_beta_smb_state",
+        "latent_beta_hml_state",
     ]
     assert list(firm_characteristics_df.columns) == [
         "stock_id",
         "t",
-        "firm_size",
-        "book_to_price",
+        "characteristic_beta_mkt",
+        "characteristic_beta_smb",
+        "characteristic_beta_hml",
     ]
 
     latent_stock_0_rows = latent_state_df.loc[
         latent_state_df["stock_id"] == "stock_000",
-        ["latent_size_state", "latent_book_to_price_state"],
+        [
+            "latent_beta_mkt_state",
+            "latent_beta_smb_state",
+            "latent_beta_hml_state",
+        ],
     ].round(10)
     assert latent_stock_0_rows.values.tolist() == [
-        [2.0, 0.0],
-        [2.1, 0.2],
-        [1.95, -0.1],
+        [1.5, 0.0, -1.0],
+        [1.35, 0.2, -0.7],
+        [1.075, -0.15, -1.3],
     ]
 
     firm_stock_0_rows = firm_characteristics_df.loc[
         firm_characteristics_df["stock_id"] == "stock_000",
-        ["firm_size", "book_to_price"],
+        [
+            "characteristic_beta_mkt",
+            "characteristic_beta_smb",
+            "characteristic_beta_hml",
+        ],
     ].to_numpy(dtype=float)
-    assert np.all(firm_stock_0_rows > 0.0)
     assert np.allclose(
         firm_stock_0_rows,
-        np.exp(np.asarray([[2.0, 0.0], [2.1, 0.2], [1.95, -0.1]], dtype=float)),
+        np.asarray(
+            [
+                [1.5, 0.0, -1.0],
+                [1.35, 0.2, -0.7],
+                [1.075, -0.15, -1.3],
+            ],
+            dtype=float,
+        ),
     )
