@@ -715,17 +715,17 @@ src/toy_ff_generator/main.py
      `stock_id, t, state, characteristic_1, characteristic_2, characteristic_3, alpha, beta_mkt, beta_smb, beta_hml, MKT, SMB, HML, epsilon, raw_return, return, price`
 
 4. `{status}_{N}_{T}_market_index.csv`
-   - 欄位為 `t, market_index, MKT, SMB, HML`
-   - `market_index_t = 同一時間點所有股票價格總和 / N`
-   - `MKT, SMB, HML` 為同一時間點的因子值
-
+   - Columns: `t, market_index, price_std, MKT, SMB, HML`
+   - `market_index_t = sum of all stock prices at time t / N`
+   - `price_std_t = cross-sectional population standard deviation of stock prices at time t (ddof=0)`
+   - `MKT, SMB, HML` are the factor values at time t
 5. `{status}_{N}_{T}_market_index.png`
-   - 同一張圖會畫出 `market_index` 與各時間點的 `MKT / SMB / HML`
-   - title 會標示 state / N / T / market index
+   - Top panel: `market_index` with a shaded `market_index +/- price_std` band
+   - Bottom panel: `MKT / SMB / HML`
+   - Title includes state / N / T / market index
 
 6. `metadata.json`
-   - 儲存本次模擬所使用的主要設定參數
-
+   - Stores the main configuration used for the simulation
 ## 測試
 
 在專案根目錄執行：

@@ -88,6 +88,7 @@ def build_market_index_df(
         panel_long_df.groupby("t", as_index=False)
         .agg(
             market_index=("price", "mean"),
+            price_std=("price", lambda values: values.std(ddof=0)),
             MKT=("MKT", "first"),
             SMB=("SMB", "first"),
             HML=("HML", "first"),
@@ -112,17 +113,43 @@ def _save_market_index_png(
         sharex=True,
     )
     x_values = market_index_df["t"].map(lambda value: int(str(value).split("_")[-1]))
+    market_values = market_index_df["market_index"].to_numpy(dtype=float)
+    price_std_values = market_index_df["price_std"].to_numpy(dtype=float)
+    avg_price_std = float(
+        market_index_df["price_std"].dropna().astype(float).mean()
+    )
+    lower_band = market_values - price_std_values
+    upper_band = market_values + price_std_values
     max_tick_count = 12
     tick_step = max(1, int(np.ceil(len(x_values) / max_tick_count)))
     tick_values = x_values.iloc[::tick_step].tolist()
     if tick_values and tick_values[-1] != int(x_values.iloc[-1]):
         tick_values.append(int(x_values.iloc[-1]))
     try:
+        market_line_color = "tab:blue"
+        market_axis.fill_between(
+            x_values,
+            lower_band,
+            upper_band,
+            color=market_line_color,
+            alpha=0.2,
+            label="market_index ± price_std",
+        )
         market_axis.plot(
             x_values,
-            market_index_df["market_index"],
+            market_values,
             linewidth=1.5,
+            color=market_line_color,
             label="market_index",
+        )
+        market_axis.text(
+            0.02,
+            0.98,
+            f"avg_std = {avg_price_std:.4f}",
+            transform=market_axis.transAxes,
+            ha="left",
+            va="top",
+            bbox={"boxstyle": "round,pad=0.3", "facecolor": "white", "alpha": 0.85},
         )
         market_axis.set_ylabel("market_index")
         market_axis.set_title(title)
