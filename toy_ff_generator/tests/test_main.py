@@ -103,14 +103,33 @@ def test_main_pipeline_generates_panel_price_return_and_metadata_outputs(tmp_pat
         .agg(
             market_index=("price", "mean"),
             price_std=("price", lambda values: values.std(ddof=0)),
+            price_min=("price", "min"),
+            price_max=("price", "max"),
             MKT=("MKT", "first"),
             SMB=("SMB", "first"),
             HML=("HML", "first"),
         )
     )
-    assert market_index_df.columns.tolist() == ["t", "market_index", "price_std", "MKT", "SMB", "HML"]
+    assert market_index_df.columns.tolist() == [
+        "t",
+        "market_index",
+        "price_std",
+        "price_min",
+        "price_max",
+        "MKT",
+        "SMB",
+        "HML",
+    ]
     assert market_index_df["t"].tolist() == expected_market_index_df["t"].tolist()
-    for column_name in ("market_index", "price_std", "MKT", "SMB", "HML"):
+    for column_name in (
+        "market_index",
+        "price_std",
+        "price_min",
+        "price_max",
+        "MKT",
+        "SMB",
+        "HML",
+    ):
         assert np.allclose(
             market_index_df[column_name].to_numpy(dtype=float),
             expected_market_index_df[column_name].to_numpy(dtype=float),

@@ -26,6 +26,16 @@ PANEL_LONG_PERCENT_COLUMNS = (
     "return",
 )
 
+PANEL_LONG_ROUNDED_COLUMNS = (
+    "characteristic_1",
+    "characteristic_2",
+    "characteristic_3",
+    "beta_mkt",
+    "beta_smb",
+    "beta_hml",
+    "price",
+)
+
 
 def set_random_seed(seed: int) -> np.random.Generator:
     return np.random.default_rng(seed)
@@ -72,6 +82,9 @@ def build_firm_characteristics_excel_view(
 
 def _format_panel_long_for_csv(panel_long_df: pd.DataFrame) -> pd.DataFrame:
     formatted_df = panel_long_df.copy()
+    for column_name in PANEL_LONG_ROUNDED_COLUMNS:
+        if column_name in formatted_df.columns:
+            formatted_df[column_name] = formatted_df[column_name].round(5)
     for column_name in PANEL_LONG_PERCENT_COLUMNS:
         if column_name in formatted_df.columns:
             formatted_df[column_name] = formatted_df[column_name].map(
@@ -89,6 +102,8 @@ def build_market_index_df(
         .agg(
             market_index=("price", "mean"),
             price_std=("price", lambda values: values.std(ddof=0)),
+            price_min=("price", "min"),
+            price_max=("price", "max"),
             MKT=("MKT", "first"),
             SMB=("SMB", "first"),
             HML=("HML", "first"),
@@ -115,11 +130,13 @@ def _save_market_index_png(
     x_values = market_index_df["t"].map(lambda value: int(str(value).split("_")[-1]))
     market_values = market_index_df["market_index"].to_numpy(dtype=float)
     price_std_values = market_index_df["price_std"].to_numpy(dtype=float)
+    price_min_values = market_index_df["price_min"].to_numpy(dtype=float)
+    price_max_values = market_index_df["price_max"].to_numpy(dtype=float)
     avg_price_std = float(
         market_index_df["price_std"].dropna().astype(float).mean()
     )
-    lower_band = market_values - price_std_values
-    upper_band = market_values + price_std_values
+    std_lower_band = market_values - price_std_values
+    std_upper_band = market_values + price_std_values
     max_tick_count = 12
     tick_step = max(1, int(np.ceil(len(x_values) / max_tick_count)))
     tick_values = x_values.iloc[::tick_step].tolist()
@@ -129,16 +146,24 @@ def _save_market_index_png(
         market_line_color = "tab:blue"
         market_axis.fill_between(
             x_values,
-            lower_band,
-            upper_band,
+            price_min_values,
+            price_max_values,
+            color=market_line_color,
+            alpha=0.08,
+            label="min/max band",
+        )
+        market_axis.fill_between(
+            x_values,
+            std_lower_band,
+            std_upper_band,
             color=market_line_color,
             alpha=0.2,
-            label="market_index ± price_std",
+            label="std band",
         )
         market_axis.plot(
             x_values,
             market_values,
-            linewidth=1.5,
+            linewidth=1.8,
             color=market_line_color,
             label="market_index",
         )

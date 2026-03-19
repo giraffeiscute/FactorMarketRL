@@ -715,12 +715,14 @@ src/toy_ff_generator/main.py
      `stock_id, t, state, characteristic_1, characteristic_2, characteristic_3, alpha, beta_mkt, beta_smb, beta_hml, MKT, SMB, HML, epsilon, raw_return, return, price`
 
 4. `{status}_{N}_{T}_market_index.csv`
-   - Columns: `t, market_index, price_std, MKT, SMB, HML`
+   - Columns: `t, market_index, price_std, price_min, price_max, MKT, SMB, HML`
    - `market_index_t = sum of all stock prices at time t / N`
    - `price_std_t = cross-sectional population standard deviation of stock prices at time t (ddof=0)`
+   - `price_min_t = minimum stock price at time t`
+   - `price_max_t = maximum stock price at time t`
    - `MKT, SMB, HML` are the factor values at time t
 5. `{status}_{N}_{T}_market_index.png`
-   - Top panel: `market_index` with a shaded `market_index +/- price_std` band
+   - Top panel: `market_index`, a shaded `market_index +/- price_std` band, and a shaded `price_min ~ price_max` band
    - Bottom panel: `MKT / SMB / HML`
    - Title includes state / N / T / market index
 

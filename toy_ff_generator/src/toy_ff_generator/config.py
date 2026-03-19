@@ -236,9 +236,9 @@ def build_default_config() -> dict[str, Any]:
         "exposure_setup": {
             # latent characteristics 映射到 exposure 的線性轉換矩陣。
             "A": [
-                [0.1, 0.0, 0.0],
-                [0.0, 0.5, 0.0],
-                [0.0, 0.0, 0.5],
+                [0.05, 0.0, 0.0],
+                [0.0, 0.4, 0.0],
+                [0.0, 0.0, 0.4],
             ],
 
             # 線性轉換的常數偏移項。
@@ -260,9 +260,9 @@ def build_default_config() -> dict[str, Any]:
 
             # epsilon 各群組對應的數值設定。
             "epsilon_levels": {
-                "low": 0.01,
-                "mid": 0.03,
-                "high": 0.05,
+                "low": 0.005,
+                "mid": 0.01,
+                "high": 0.02,
             },
 
             # 每檔股票固定的 alpha / epsilon 群組配置。
