@@ -11,6 +11,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 import torch
+from torch.utils.data import Dataset
 
 from .config import DataConfig
 
@@ -110,6 +111,25 @@ class PanelMetadata:
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+class PortfolioWindowDataset(Dataset):
+    """Rolling-window dataset used by train.py for epoch-based training."""
+
+    def __init__(self, panel_dataset: "PortfolioPanelDataset", start_indices: list[int]) -> None:
+        self.panel_dataset = panel_dataset
+        self.start_indices = start_indices
+
+    def __len__(self) -> int:
+        return len(self.start_indices)
+
+    def __getitem__(self, index: int) -> dict[str, torch.Tensor]:
+        start_index = self.start_indices[index]
+        window = self.panel_dataset.get_window(start_index)
+        return {
+            key: torch.from_numpy(value)
+            for key, value in window.items()
+        }
 
 
 class PortfolioPanelDataset:
@@ -264,6 +284,10 @@ class PortfolioPanelDataset:
         return max(0, split_length - self.lookback - self.holding_period)
 
     @property
+    def total_window_count(self) -> int:
+        return max(0, self.parsed_t - self.lookback - self.holding_period)
+
+    @property
     def num_stocks(self) -> int:
         return len(self.effective_stock_ids)
 
@@ -271,21 +295,54 @@ class PortfolioPanelDataset:
     def num_times(self) -> int:
         return self.parsed_t
 
+    def get_window(self, start_index: int) -> dict[str, np.ndarray]:
+        if start_index < 0 or start_index >= self.total_window_count:
+            raise IndexError(f"Window start_index={start_index} is out of range for total_window_count={self.total_window_count}.")
+
+        lookback_stop = start_index + self.lookback
+        entry_index = lookback_stop
+        exit_index = lookback_stop + self.holding_period
+
+        x_stock = self.stock_features_scaled[:, start_index:lookback_stop, :]
+        x_market = self.market_features_scaled[start_index:lookback_stop]
+        entry_prices = self.price_array[:, entry_index]
+        exit_prices = self.price_array[:, exit_index]
+        r_stock = (exit_prices / entry_prices) - 1.0
+        stock_indices = np.arange(self.num_stocks, dtype=np.int64)
+
+        return {
+            "x_stock": x_stock.astype(np.float32),
+            "x_market": x_market.astype(np.float32),
+            "r_stock": r_stock.astype(np.float32),
+            "stock_indices": stock_indices,
+        }
+
+    def get_train_val_window_indices(self) -> tuple[list[int], list[int]]:
+        if self.total_window_count < 2:
+            return [], []
+
+        train_count = max(1, int(self.total_window_count * self.config.train_ratio))
+        if train_count >= self.total_window_count:
+            train_count = self.total_window_count - 1
+
+        train_indices = list(range(train_count))
+        val_indices = list(range(train_count, self.total_window_count))
+        return train_indices, val_indices
+
+    def build_train_val_datasets(self) -> tuple[PortfolioWindowDataset, PortfolioWindowDataset]:
+        train_indices, val_indices = self.get_train_val_window_indices()
+        return PortfolioWindowDataset(self, train_indices), PortfolioWindowDataset(self, val_indices)
+
     def get_analysis_window(self) -> dict[str, np.ndarray]:
         if self.available_analysis_windows != 1:
             raise RuntimeError("Exactly one cross-boundary analysis window is expected for this diagnostic baseline.")
 
-        x_stock = self.stock_features_scaled[:, : self.lookback, :]
-        x_market = self.market_features_scaled[: self.lookback]
-        entry_prices = self.price_array[:, self.entry_index]
-        exit_prices = self.price_array[:, self.exit_index]
-        r_stock = (exit_prices / entry_prices) - 1.0
-
+        window = self.get_window(start_index=0)
         return {
-            "x_stock": x_stock[np.newaxis, ...].astype(np.float32),
-            "x_market": x_market[np.newaxis, ...].astype(np.float32),
-            "r_stock": r_stock[np.newaxis, ...].astype(np.float32),
-            "stock_indices": np.arange(self.num_stocks, dtype=np.int64)[np.newaxis, ...],
+            "x_stock": window["x_stock"][np.newaxis, ...],
+            "x_market": window["x_market"][np.newaxis, ...],
+            "r_stock": window["r_stock"][np.newaxis, ...],
+            "stock_indices": window["stock_indices"][np.newaxis, ...],
         }
 
     def get_analysis_batch(self, device: torch.device | None = None) -> dict[str, torch.Tensor]:

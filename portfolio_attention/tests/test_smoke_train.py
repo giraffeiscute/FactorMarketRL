@@ -5,10 +5,11 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
+import torch
 
 from portfolio_attention.config import DataConfig, ModelConfig, PathsConfig, TrainConfig
 from portfolio_attention.evaluate import enrich_top_k_positions, run_diagnostic_evaluation
-from portfolio_attention.train import run_diagnostic_training
+from portfolio_attention.train import run_diagnostic_training, run_training
 
 
 def write_panel_csv(path: Path, num_stocks: int = 8, num_times: int = 81, include_aux: bool = True) -> Path:
@@ -70,9 +71,17 @@ def test_cpu_only_smoke_train_and_evaluate(tmp_path: Path) -> None:
             "portfolio_return",
             "sharpe_like",
             "source_path",
+            "train_config",
             "top_k_stock_weights",
         ]
     )
+    assert exported["train_config"] == {
+        "batch_size": 16,
+        "num_epochs": 30,
+        "weight_decay": 1e-4,
+        "grad_clip_norm": 1.0,
+        "early_stopping_patience": 5,
+    }
     assert len(metrics_exported["all_stock_weights"]) == 8
     assert len(metrics_exported["allocation_groups"]) >= 1
     assert len(metrics_exported["allocation_groups_top10_plus_others"]) >= 1
@@ -89,6 +98,43 @@ def test_cpu_only_smoke_train_and_evaluate(tmp_path: Path) -> None:
     all_stock_weights_csv = pd.read_csv(metrics_exported["all_stock_weights_csv"])
     assert len(all_stock_weights_csv) == 8
     assert all_stock_weights_csv.loc[0, "weight"] >= all_stock_weights_csv.loc[len(all_stock_weights_csv) - 1, "weight"]
+
+
+def test_epoch_train_mode_saves_best_and_last_checkpoints(tmp_path: Path) -> None:
+    csv_path = write_panel_csv(tmp_path / "mini_8_100_panel_long.csv", num_times=100)
+    paths = PathsConfig(output_root=tmp_path / "outputs")
+    data_config = DataConfig(csv_path=csv_path)
+    train_config = TrainConfig(
+        mode="train",
+        device="cpu",
+        max_stocks=8,
+        batch_size=16,
+        num_epochs=4,
+        weight_decay=1e-4,
+        grad_clip_norm=1.0,
+        early_stopping_patience=2,
+    )
+
+    metrics = run_training(data_config, ModelConfig(), train_config, paths)
+
+    assert metrics["diagnostic_only"] is False
+    assert metrics["mode"] == "train"
+    assert metrics["batch_size"] == 16
+    assert metrics["num_epochs_requested"] == 4
+    assert metrics["train_window_count"] >= 1
+    assert metrics["val_window_count"] >= 1
+    assert metrics["epochs_completed"] <= 4
+    assert metrics["best_epoch"] <= metrics["epochs_completed"]
+    assert len(metrics["history"]) == metrics["epochs_completed"]
+    assert (paths.checkpoints_dir / "train_best.pt").exists()
+    assert (paths.checkpoints_dir / "train_last.pt").exists()
+    assert (paths.metrics_dir / "train_metrics.json").exists()
+
+    best_checkpoint = torch.load(paths.checkpoints_dir / "train_best.pt", map_location="cpu", weights_only=False)
+    assert best_checkpoint["train_config"]["batch_size"] == 16
+    assert best_checkpoint["train_config"]["weight_decay"] == pytest.approx(1e-4)
+    assert best_checkpoint["train_config"]["grad_clip_norm"] == pytest.approx(1.0)
+    assert best_checkpoint["train_config"]["early_stopping_patience"] == 2
 
 
 def test_export_rows_require_aux_columns(tmp_path: Path) -> None:

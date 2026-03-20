@@ -33,6 +33,13 @@ else:
     from .utils import ensure_output_dirs, resolve_device, save_json, state_id_from_csv_path
 
 REQUIRED_AUX_COLUMNS = ["stock_id", "t", "mu", "alpha", "epsilon_variance"]
+EXPORTED_TRAIN_CONFIG_KEYS = [
+    "batch_size",
+    "num_epochs",
+    "weight_decay",
+    "grad_clip_norm",
+    "early_stopping_patience",
+]
 
 
 def _parse_source_time_to_day(raw_value: object) -> int:
@@ -56,6 +63,15 @@ def _load_aux_frame(source_csv_path: Path) -> pd.DataFrame:
     aux_frame = pd.read_csv(source_csv_path, usecols=REQUIRED_AUX_COLUMNS)
     aux_frame["analysis_day"] = aux_frame["t"].map(_parse_source_time_to_day)
     return aux_frame
+
+
+def _extract_exported_train_config(checkpoint: dict) -> dict[str, object]:
+    checkpoint_train_config = checkpoint.get("train_config", {})
+    return {
+        key: checkpoint_train_config[key]
+        for key in EXPORTED_TRAIN_CONFIG_KEYS
+        if key in checkpoint_train_config
+    }
 
 
 def enrich_positions(
@@ -312,6 +328,7 @@ def run_diagnostic_evaluation(
         "source_path": state_id,
         "diagnostic_only": True,
         "device": str(device),
+        "train_config": _extract_exported_train_config(checkpoint),
         "portfolio_return": portfolio_return,
         "average_portfolio_return": portfolio_return,
         "cash_weight": cash_weight,
