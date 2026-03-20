@@ -4,3 +4,5 @@ Running diagnostic mode because the fixed T=81 sample definition yields 0 legal 
 diagnostic_step=0 loss=-0.01420559 portfolio_return=0.01420559
 Running diagnostic mode because the fixed T=81 sample definition yields 0 legal train windows and 0 legal test windows.
 diagnostic_step=0 loss=-0.01420559 portfolio_return=0.01420559
+Running diagnostic mode because the fixed T=81 sample definition yields 0 legal train windows and 0 legal test windows.
+diagnostic_step=0 loss=-0.01420559 portfolio_return=0.01420559

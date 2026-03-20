@@ -44,6 +44,17 @@ def save_json(payload: dict, path: Path) -> None:
     path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
 
 
+def state_id_from_csv_path(csv_path: Path) -> str:
+    name = csv_path.name
+    if not name.endswith(".csv"):
+        raise ValueError(f"Expected a .csv file, got: {csv_path}")
+    stem = csv_path.stem
+    suffix = "_panel_long"
+    if not stem.endswith(suffix):
+        raise ValueError(f"Expected file name ending with '{suffix}.csv', got: {csv_path.name}")
+    return stem[: -len(suffix)]
+
+
 def append_log(path: Path, message: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as handle:
