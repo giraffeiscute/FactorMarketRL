@@ -132,9 +132,7 @@ def run_diagnostic_training(
     ensure_output_dirs(paths)
     device = resolve_device(train_config.device)
 
-    dataset = PortfolioPanelDataset(
-        replace(data_config, max_stocks=train_config.max_stocks or data_config.max_stocks)
-    )
+    dataset = PortfolioPanelDataset(data_config)
     resolved_model_config = replace(model_config, num_stocks=dataset.num_stocks, lookback=data_config.lookback)
     model = PortfolioAttentionModel(resolved_model_config).to(device)
     optimizer = torch.optim.Adam(
@@ -148,13 +146,25 @@ def run_diagnostic_training(
         "mode": "diagnostic",
         "device": str(device),
         "diagnostic_only": True,
+        "loaded_feature_columns": {
+            "stock": dataset.loaded_stock_feature_columns,
+            "market": dataset.loaded_market_feature_columns,
+        },
         "legal_train_windows": dataset.metadata.legal_train_windows,
         "legal_test_windows": dataset.metadata.legal_test_windows,
         "analysis_windows": dataset.metadata.available_analysis_windows,
-        "effective_num_stocks": dataset.metadata.effective_num_stocks,
+        "selected_num_stocks": dataset.metadata.selected_num_stocks,
     }
 
     log_path = paths.logs_dir / "train.log"
+    append_log(
+        log_path,
+        (
+            "Loaded feature columns successfully: "
+            f"stock={dataset.loaded_stock_feature_columns} "
+            f"market={dataset.loaded_market_feature_columns}"
+        ),
+    )
     append_log(
         log_path,
         "Running diagnostic mode because the fixed T=81 sample definition yields 0 legal train windows and 0 legal test windows.",
@@ -216,9 +226,7 @@ def run_epoch_training(
     ensure_output_dirs(paths)
     device = resolve_device(train_config.device)
 
-    dataset = PortfolioPanelDataset(
-        replace(data_config, max_stocks=train_config.max_stocks or data_config.max_stocks)
-    )
+    dataset = PortfolioPanelDataset(data_config)
     train_dataset, val_dataset = dataset.build_train_val_datasets()
     if len(train_dataset) == 0 or len(val_dataset) == 0:
         raise RuntimeError(
@@ -249,6 +257,14 @@ def run_epoch_training(
     )
 
     log_path = paths.logs_dir / "train.log"
+    append_log(
+        log_path,
+        (
+            "Loaded feature columns successfully: "
+            f"stock={dataset.loaded_stock_feature_columns} "
+            f"market={dataset.loaded_market_feature_columns}"
+        ),
+    )
     append_log(
         log_path,
         (
@@ -364,6 +380,10 @@ def run_epoch_training(
         "mode": "train",
         "device": str(device),
         "diagnostic_only": False,
+        "loaded_feature_columns": {
+            "stock": dataset.loaded_stock_feature_columns,
+            "market": dataset.loaded_market_feature_columns,
+        },
         "loss_name": train_config.loss_name,
         "batch_size": train_config.batch_size,
         "num_epochs_requested": train_config.num_epochs,
@@ -407,7 +427,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--loss", default="return", choices=["return", "sharpe"])
     parser.add_argument("--diagnostic-steps", type=int, default=1)
     parser.add_argument("--seed", type=int, default=7)
-    parser.add_argument("--max-stocks", type=int, default=None)
+    parser.add_argument("--num-stocks", type=int, default=None)
     parser.add_argument("--batch-size", type=int, default=TrainConfig.batch_size)
     parser.add_argument("--num-epochs", type=int, default=TrainConfig.num_epochs)
     parser.add_argument("--weight-decay", type=float, default=TrainConfig.weight_decay)
@@ -426,7 +446,7 @@ def main() -> None:
     default_data_config = DataConfig()
     data_config = DataConfig(
         csv_path=args.data_path or default_data_config.csv_path,
-        max_stocks=args.max_stocks,
+        num_stocks=args.num_stocks,
     )
     train_config = TrainConfig(
         mode=args.mode,
@@ -434,7 +454,6 @@ def main() -> None:
         diagnostic_steps=args.diagnostic_steps,
         seed=args.seed,
         loss_name=args.loss,
-        max_stocks=args.max_stocks,
         batch_size=args.batch_size,
         num_epochs=args.num_epochs,
         weight_decay=args.weight_decay,

@@ -85,3 +85,19 @@ def test_t81_honest_window_counts_and_cross_boundary_window(tmp_path: Path) -> N
     exit_price = dataset.price_array[0, 79]
     expected_return = (exit_price / entry_price) - 1.0
     assert np.isclose(window["r_stock"][0, 0], expected_return)
+
+
+def test_fixed_num_stocks_selects_exact_count(tmp_path: Path) -> None:
+    csv_path = write_panel_csv(tmp_path / "mini_4_81_panel_long.csv")
+    dataset = PortfolioPanelDataset(DataConfig(csv_path=csv_path, num_stocks=3))
+
+    assert dataset.num_stocks == 3
+    assert dataset.selected_stock_ids == ["stock_000", "stock_001", "stock_002"]
+    assert dataset.metadata.selected_num_stocks == 3
+
+
+def test_fixed_num_stocks_requires_sufficient_data(tmp_path: Path) -> None:
+    csv_path = write_panel_csv(tmp_path / "mini_4_81_panel_long.csv")
+
+    with pytest.raises(ValueError, match="Requested fixed num_stocks=5"):
+        PortfolioPanelDataset(DataConfig(csv_path=csv_path, num_stocks=5))

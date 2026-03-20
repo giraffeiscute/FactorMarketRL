@@ -285,7 +285,7 @@ def run_diagnostic_evaluation(
     top_values, top_indices = torch.topk(stock_weights, k=top_k)
     top_positions = [
         {
-            "stock_id": dataset.effective_stock_ids[int(index)],
+            "stock_id": dataset.selected_stock_ids[int(index)],
             "weight": float(weight.item()),
         }
         for weight, index in zip(top_values, top_indices)
@@ -302,7 +302,7 @@ def run_diagnostic_evaluation(
         aux_frame=aux_frame,
         metadata=dataset.metadata.as_dict(),
         positions=build_all_stock_positions(
-            stock_ids=dataset.effective_stock_ids,
+            stock_ids=dataset.selected_stock_ids,
             stock_weights=stock_weights,
         ),
     )
@@ -365,7 +365,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--checkpoint", type=Path, default=None)
     parser.add_argument("--device", default="auto")
     parser.add_argument("--top-k", type=int, default=5)
-    parser.add_argument("--max-stocks", type=int, default=None)
+    parser.add_argument("--num-stocks", type=int, default=None)
     return parser
 
 
@@ -375,7 +375,7 @@ def main() -> None:
     default_data_config = DataConfig()
     data_config = DataConfig(
         csv_path=args.data_path or default_data_config.csv_path,
-        max_stocks=args.max_stocks,
+        num_stocks=args.num_stocks,
     )
     payload = run_diagnostic_evaluation(
         data_config=data_config,

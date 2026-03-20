@@ -106,7 +106,7 @@ class PanelMetadata:
     legal_test_windows: int
     available_analysis_windows: int
     analysis_only: bool
-    effective_num_stocks: int
+    selected_num_stocks: int
     effective_time_steps: int
 
     def as_dict(self) -> dict[str, Any]:
@@ -133,7 +133,7 @@ class PortfolioWindowDataset(Dataset):
 
 
 class PortfolioPanelDataset:
-    """Loads the long-format panel and produces the single analysis window.
+    """Loads the long-format panel and builds a fixed-stock dataset.
 
     Time position uses `x_t = w_t + p_t`.
     Stock identity position is handled later in the model as `x_{s,t} = [z_{s,t}; e_s]`.
@@ -149,18 +149,26 @@ class PortfolioPanelDataset:
         self.lookback = config.lookback
         self._load()
 
+    def _resolve_selected_stock_ids(self) -> list[str]:
+        if self.config.num_stocks is None:
+            return self.stock_ids
+        if self.config.num_stocks <= 0:
+            raise ValueError("DataConfig.num_stocks must be positive when provided.")
+        if len(self.stock_ids) < self.config.num_stocks:
+            raise ValueError(
+                f"Requested fixed num_stocks={self.config.num_stocks}, "
+                f"but dataset only contains {len(self.stock_ids)} stocks."
+            )
+        return self.stock_ids[: self.config.num_stocks]
+
     def _load(self) -> None:
         header = pd.read_csv(self.csv_path, nrows=0).columns.tolist()
         missing_columns = [column for column in REQUIRED_COLUMNS if column not in header]
         if missing_columns:
             raise ValueError(f"Missing required columns: {missing_columns}")
-        extra_columns = [column for column in header if column not in REQUIRED_COLUMNS]
-        if extra_columns:
-            warnings.warn(
-                f"Ignoring extra columns outside the fixed schema: {extra_columns}",
-                RuntimeWarning,
-                stacklevel=2,
-            )
+        self.ignored_extra_columns = [column for column in header if column not in REQUIRED_COLUMNS]
+        self.loaded_stock_feature_columns = list(STOCK_FEATURE_COLUMNS)
+        self.loaded_market_feature_columns = list(MARKET_FEATURE_COLUMNS)
 
         frame = pd.read_csv(self.csv_path, usecols=REQUIRED_COLUMNS)
         for column in NUMERIC_COLUMNS:
@@ -238,14 +246,11 @@ class PortfolioPanelDataset:
         self.stock_features_scaled = self.stock_scaler.transform(self.stock_features_raw)
         self.market_features_scaled = self.market_scaler.transform(self.market_features_raw)
 
-        effective_stock_ids = self.stock_ids
-        if self.config.max_stocks is not None:
-            effective_stock_ids = self.stock_ids[: self.config.max_stocks]
-        self.effective_stock_ids = effective_stock_ids
-        effective_n = len(self.effective_stock_ids)
-        self.stock_features_scaled = self.stock_features_scaled[:effective_n]
-        self.stock_features_raw = self.stock_features_raw[:effective_n]
-        self.price_array = self.price_array[:effective_n]
+        self.selected_stock_ids = self._resolve_selected_stock_ids()
+        selected_n = len(self.selected_stock_ids)
+        self.stock_features_scaled = self.stock_features_scaled[:selected_n]
+        self.stock_features_raw = self.stock_features_raw[:selected_n]
+        self.price_array = self.price_array[:selected_n]
 
         self.legal_train_windows = self._count_legal_windows(self.train_days)
         self.legal_test_windows = self._count_legal_windows(self.test_days)
@@ -268,7 +273,7 @@ class PortfolioPanelDataset:
             legal_test_windows=self.legal_test_windows,
             available_analysis_windows=self.available_analysis_windows,
             analysis_only=True,
-            effective_num_stocks=effective_n,
+            selected_num_stocks=selected_n,
             effective_time_steps=self.parsed_t,
         )
 
@@ -289,7 +294,7 @@ class PortfolioPanelDataset:
 
     @property
     def num_stocks(self) -> int:
-        return len(self.effective_stock_ids)
+        return len(self.selected_stock_ids)
 
     @property
     def num_times(self) -> int:

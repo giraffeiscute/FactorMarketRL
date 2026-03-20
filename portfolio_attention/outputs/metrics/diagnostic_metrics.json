@@ -3,10 +3,22 @@
   "checkpoint_path": "C:\\Users\\Yuan\\Desktop\\YUAN\\\u5be6\u7fd2\\\u5317\u4eac\u91cf\u5316\u5be6\u7fd2\\FactorMarketRL\\portfolio_attention\\outputs\\checkpoints\\diagnostic_last.pt",
   "device": "cpu",
   "diagnostic_only": true,
-  "effective_num_stocks": 4860,
   "final_loss": -0.014205594547092915,
   "legal_test_windows": 0,
   "legal_train_windows": 0,
+  "loaded_feature_columns": {
+    "market": [
+      "MKT",
+      "SMB",
+      "HML"
+    ],
+    "stock": [
+      "characteristic_1",
+      "characteristic_2",
+      "characteristic_3",
+      "price"
+    ]
+  },
   "loss_name": "return",
   "metadata": {
     "analysis_entry_day": 61,
@@ -15,17 +27,18 @@
     "available_analysis_windows": 1,
     "csv_unique_stocks": 4860,
     "csv_unique_times": 81,
-    "effective_num_stocks": 4860,
     "effective_time_steps": 81,
     "legal_test_windows": 0,
     "legal_train_windows": 0,
     "lookback": 60,
     "parsed_n": 4860,
     "parsed_t": 81,
+    "selected_num_stocks": 4860,
     "source_path": "C:\\Users\\Yuan\\Desktop\\YUAN\\\u5be6\u7fd2\\\u5317\u4eac\u91cf\u5316\u5be6\u7fd2\\FactorMarketRL\\toy_ff_generator\\outputs\\bull_4860_81_panel_long.csv",
     "test_days": 21,
     "train_days": 60
   },
   "mode": "diagnostic",
-  "portfolio_return": 0.014205594547092915
+  "portfolio_return": 0.014205594547092915,
+  "selected_num_stocks": 4860
 }

@@ -41,8 +41,8 @@ def write_panel_csv(path: Path, num_stocks: int = 8, num_times: int = 81, includ
 def test_cpu_only_smoke_train_and_evaluate(tmp_path: Path) -> None:
     csv_path = write_panel_csv(tmp_path / "mini_8_81_panel_long.csv")
     paths = PathsConfig(output_root=tmp_path / "outputs")
-    data_config = DataConfig(csv_path=csv_path)
-    train_config = TrainConfig(device="cpu", diagnostic_steps=1, max_stocks=8)
+    data_config = DataConfig(csv_path=csv_path, num_stocks=8)
+    train_config = TrainConfig(device="cpu", diagnostic_steps=1)
 
     metrics = run_diagnostic_training(data_config, ModelConfig(), train_config, paths)
     evaluation = run_diagnostic_evaluation(data_config, paths, device_name="cpu")
@@ -103,17 +103,16 @@ def test_cpu_only_smoke_train_and_evaluate(tmp_path: Path) -> None:
 def test_epoch_train_mode_saves_best_and_last_checkpoints(tmp_path: Path) -> None:
     csv_path = write_panel_csv(tmp_path / "mini_8_100_panel_long.csv", num_times=100)
     paths = PathsConfig(output_root=tmp_path / "outputs")
-    data_config = DataConfig(csv_path=csv_path)
     train_config = TrainConfig(
         mode="train",
         device="cpu",
-        max_stocks=8,
         batch_size=16,
         num_epochs=4,
         weight_decay=1e-4,
         grad_clip_norm=1.0,
         early_stopping_patience=2,
     )
+    data_config = DataConfig(csv_path=csv_path, num_stocks=8)
 
     metrics = run_training(data_config, ModelConfig(), train_config, paths)
 
@@ -150,7 +149,7 @@ def test_export_rows_require_aux_columns(tmp_path: Path) -> None:
                 "available_analysis_windows": 1,
                 "csv_unique_stocks": 8,
                 "csv_unique_times": 81,
-                "effective_num_stocks": 8,
+                "selected_num_stocks": 8,
                 "effective_time_steps": 81,
                 "legal_test_windows": 0,
                 "legal_train_windows": 0,
@@ -181,7 +180,7 @@ def test_export_rows_require_single_match(tmp_path: Path) -> None:
                 "available_analysis_windows": 1,
                 "csv_unique_stocks": 8,
                 "csv_unique_times": 81,
-                "effective_num_stocks": 8,
+                "selected_num_stocks": 8,
                 "effective_time_steps": 81,
                 "legal_test_windows": 0,
                 "legal_train_windows": 0,

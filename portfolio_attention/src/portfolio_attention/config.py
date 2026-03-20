@@ -47,12 +47,14 @@ class PathsConfig:
 
 @dataclass
 class DataConfig:
+    """Dataset construction settings, including the fixed stock count."""
+
     csv_path: Path = field(default_factory=default_data_path)
     lookback: int = 60
     train_ratio: float = 0.75
     analysis_entry_day: int | None = None
     analysis_exit_day: int | None = None
-    max_stocks: int | None = None
+    num_stocks: int | None = None
 
     def resolved_entry_day(self) -> int:
         return self.analysis_entry_day or (self.lookback + 1)
@@ -60,7 +62,7 @@ class DataConfig:
 
 @dataclass
 class ModelConfig:
-    num_stocks: int | None = None
+    num_stocks: int = 4860
     stock_feature_dim: int = 4
     market_feature_dim: int = 3
     lookback: int = 60
@@ -77,6 +79,8 @@ class ModelConfig:
 
 @dataclass
 class TrainConfig:
+    """Training-loop settings only. Stock count lives in DataConfig."""
+
     seed: int = 7
     learning_rate: float = 1e-3
     batch_size: int = 16
@@ -89,4 +93,3 @@ class TrainConfig:
     mode: str = "diagnostic"
     device: str = "auto"
     checkpoint_name: str = "diagnostic_last.pt"
-    max_stocks: int | None = None
