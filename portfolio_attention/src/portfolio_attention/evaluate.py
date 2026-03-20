@@ -74,6 +74,16 @@ def _extract_exported_train_config(checkpoint: dict) -> dict[str, object]:
     }
 
 
+def _validate_checkpoint_metadata(checkpoint: dict, dataset: PortfolioPanelDataset) -> None:
+    checkpoint_metadata = checkpoint.get("metadata", {})
+    checkpoint_num_stocks = checkpoint_metadata.get("selected_num_stocks")
+    if checkpoint_num_stocks is not None and int(checkpoint_num_stocks) != dataset.num_stocks:
+        raise ValueError(
+            f"Checkpoint expects selected_num_stocks={checkpoint_num_stocks}, "
+            f"but the evaluation dataset provides {dataset.num_stocks} stocks."
+        )
+
+
 def enrich_positions(
     *,
     aux_frame: pd.DataFrame,
@@ -264,8 +274,9 @@ def run_diagnostic_evaluation(
 
     resolved_checkpoint = checkpoint_path or (paths.checkpoints_dir / "diagnostic_last.pt")
     checkpoint = torch.load(resolved_checkpoint, map_location=device, weights_only=False)
+    _validate_checkpoint_metadata(checkpoint, dataset)
     model_config = ModelConfig(**checkpoint["model_config"])
-    model = PortfolioAttentionModel(model_config).to(device)
+    model = PortfolioAttentionModel(model_config, num_stocks=dataset.num_stocks).to(device)
     model.load_state_dict(checkpoint["model_state_dict"])
     model.eval()
 

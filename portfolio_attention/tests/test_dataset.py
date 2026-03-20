@@ -87,17 +87,17 @@ def test_t81_honest_window_counts_and_cross_boundary_window(tmp_path: Path) -> N
     assert np.isclose(window["r_stock"][0, 0], expected_return)
 
 
-def test_fixed_num_stocks_selects_exact_count(tmp_path: Path) -> None:
+def test_explicit_num_stocks_matching_dataset_is_allowed(tmp_path: Path) -> None:
     csv_path = write_panel_csv(tmp_path / "mini_4_81_panel_long.csv")
-    dataset = PortfolioPanelDataset(DataConfig(csv_path=csv_path, num_stocks=3))
+    dataset = PortfolioPanelDataset(DataConfig(csv_path=csv_path, num_stocks=4))
 
-    assert dataset.num_stocks == 3
-    assert dataset.selected_stock_ids == ["stock_000", "stock_001", "stock_002"]
-    assert dataset.metadata.selected_num_stocks == 3
+    assert dataset.num_stocks == 4
+    assert dataset.selected_stock_ids == ["stock_000", "stock_001", "stock_002", "stock_003"]
+    assert dataset.metadata.selected_num_stocks == 4
 
 
-def test_fixed_num_stocks_requires_sufficient_data(tmp_path: Path) -> None:
+def test_explicit_num_stocks_must_match_dataset_count(tmp_path: Path) -> None:
     csv_path = write_panel_csv(tmp_path / "mini_4_81_panel_long.csv")
 
-    with pytest.raises(ValueError, match="Requested fixed num_stocks=5"):
+    with pytest.raises(ValueError, match="does not match the dataset stock count"):
         PortfolioPanelDataset(DataConfig(csv_path=csv_path, num_stocks=5))

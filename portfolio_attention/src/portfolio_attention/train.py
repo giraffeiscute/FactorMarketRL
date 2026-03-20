@@ -51,6 +51,10 @@ def _move_batch_to_device(batch: dict[str, Any], device: torch.device) -> dict[s
     }
 
 
+def _resolve_model_config(model_config: ModelConfig, data_config: DataConfig) -> ModelConfig:
+    return replace(model_config, lookback=data_config.lookback)
+
+
 def _run_loss_step(
     model: PortfolioAttentionModel,
     batch: dict[str, torch.Tensor],
@@ -133,8 +137,8 @@ def run_diagnostic_training(
     device = resolve_device(train_config.device)
 
     dataset = PortfolioPanelDataset(data_config)
-    resolved_model_config = replace(model_config, num_stocks=dataset.num_stocks, lookback=data_config.lookback)
-    model = PortfolioAttentionModel(resolved_model_config).to(device)
+    resolved_model_config = _resolve_model_config(model_config, data_config)
+    model = PortfolioAttentionModel(resolved_model_config, num_stocks=dataset.num_stocks).to(device)
     optimizer = torch.optim.Adam(
         model.parameters(),
         lr=train_config.learning_rate,
@@ -234,8 +238,8 @@ def run_epoch_training(
             "Use diagnostic mode for single-window analysis."
         )
 
-    resolved_model_config = replace(model_config, num_stocks=dataset.num_stocks, lookback=data_config.lookback)
-    model = PortfolioAttentionModel(resolved_model_config).to(device)
+    resolved_model_config = _resolve_model_config(model_config, data_config)
+    model = PortfolioAttentionModel(resolved_model_config, num_stocks=dataset.num_stocks).to(device)
     optimizer = torch.optim.Adam(
         model.parameters(),
         lr=train_config.learning_rate,

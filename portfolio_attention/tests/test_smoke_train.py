@@ -98,6 +98,8 @@ def test_cpu_only_smoke_train_and_evaluate(tmp_path: Path) -> None:
     all_stock_weights_csv = pd.read_csv(metrics_exported["all_stock_weights_csv"])
     assert len(all_stock_weights_csv) == 8
     assert all_stock_weights_csv.loc[0, "weight"] >= all_stock_weights_csv.loc[len(all_stock_weights_csv) - 1, "weight"]
+    diagnostic_checkpoint = torch.load(paths.checkpoints_dir / "diagnostic_last.pt", map_location="cpu", weights_only=False)
+    assert "num_stocks" not in diagnostic_checkpoint["model_config"]
 
 
 def test_epoch_train_mode_saves_best_and_last_checkpoints(tmp_path: Path) -> None:
@@ -130,6 +132,7 @@ def test_epoch_train_mode_saves_best_and_last_checkpoints(tmp_path: Path) -> Non
     assert (paths.metrics_dir / "train_metrics.json").exists()
 
     best_checkpoint = torch.load(paths.checkpoints_dir / "train_best.pt", map_location="cpu", weights_only=False)
+    assert "num_stocks" not in best_checkpoint["model_config"]
     assert best_checkpoint["train_config"]["batch_size"] == 16
     assert best_checkpoint["train_config"]["weight_decay"] == pytest.approx(1e-4)
     assert best_checkpoint["train_config"]["grad_clip_norm"] == pytest.approx(1.0)

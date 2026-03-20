@@ -47,13 +47,17 @@ class PathsConfig:
 
 @dataclass
 class DataConfig:
-    """Dataset construction settings, including the fixed stock count."""
+    """Dataset construction settings.
+
+    `num_stocks` is the single explicit stock-count input for the project.
+    When omitted, the dataset's actual stock count is used.
+    """
 
     csv_path: Path = field(default_factory=default_data_path)
     lookback: int = 60
-    train_ratio: float = 0.75
-    analysis_entry_day: int | None = None
-    analysis_exit_day: int | None = None
+    train_ratio: float = 0.8
+    analysis_entry_day: int = 61
+    analysis_exit_day: int = 80
     num_stocks: int | None = None
 
     def resolved_entry_day(self) -> int:
@@ -62,16 +66,17 @@ class DataConfig:
 
 @dataclass
 class ModelConfig:
-    num_stocks: int = 4860
+    """Model architecture settings only. Stock count is passed explicitly."""
+
     stock_feature_dim: int = 4
     market_feature_dim: int = 3
     lookback: int = 60
-    stock_temporal_dim: int = 16
-    market_temporal_dim: int = 16
-    cross_sectional_dim: int = 16
-    stock_id_embedding_dim: int = 8
-    attention_heads: int = 1
-    dropout: float = 0.0
+    stock_temporal_dim: int = 64
+    market_temporal_dim: int = 32
+    cross_sectional_dim: int = 64
+    stock_id_embedding_dim: int = 16
+    attention_heads: int = 4
+    dropout: float = 0.1
 
     def as_dict(self) -> dict:
         return asdict(self)
@@ -81,8 +86,8 @@ class ModelConfig:
 class TrainConfig:
     """Training-loop settings only. Stock count lives in DataConfig."""
 
-    seed: int = 7
-    learning_rate: float = 1e-3
+    seed: int = 42
+    learning_rate: float = 2e-4
     batch_size: int = 16
     num_epochs: int = 30
     weight_decay: float = 1e-4
@@ -90,6 +95,6 @@ class TrainConfig:
     early_stopping_patience: int = 5
     diagnostic_steps: int = 1
     loss_name: str = "return"
-    mode: str = "diagnostic"
+    mode: str = "train"
     device: str = "auto"
     checkpoint_name: str = "diagnostic_last.pt"

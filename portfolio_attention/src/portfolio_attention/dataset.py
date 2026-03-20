@@ -149,17 +149,17 @@ class PortfolioPanelDataset:
         self.lookback = config.lookback
         self._load()
 
-    def _resolve_selected_stock_ids(self) -> list[str]:
+    def _validate_num_stocks(self) -> None:
         if self.config.num_stocks is None:
-            return self.stock_ids
+            return
         if self.config.num_stocks <= 0:
             raise ValueError("DataConfig.num_stocks must be positive when provided.")
-        if len(self.stock_ids) < self.config.num_stocks:
+        actual_num_stocks = len(self.stock_ids)
+        if self.config.num_stocks != actual_num_stocks:
             raise ValueError(
-                f"Requested fixed num_stocks={self.config.num_stocks}, "
-                f"but dataset only contains {len(self.stock_ids)} stocks."
+                f"DataConfig.num_stocks={self.config.num_stocks} does not match the dataset stock count "
+                f"{actual_num_stocks} inferred from {self.csv_path.name}."
             )
-        return self.stock_ids[: self.config.num_stocks]
 
     def _load(self) -> None:
         header = pd.read_csv(self.csv_path, nrows=0).columns.tolist()
@@ -190,6 +190,7 @@ class PortfolioPanelDataset:
             raise ValueError(
                 f"Parsed T={self.parsed_t} from file name but CSV contains {len(self.time_index)} time points."
             )
+        self._validate_num_stocks()
 
         full_index = pd.MultiIndex.from_product(
             [self.stock_ids, self.time_index],
@@ -246,16 +247,16 @@ class PortfolioPanelDataset:
         self.stock_features_scaled = self.stock_scaler.transform(self.stock_features_raw)
         self.market_features_scaled = self.market_scaler.transform(self.market_features_raw)
 
-        self.selected_stock_ids = self._resolve_selected_stock_ids()
+        self.selected_stock_ids = list(self.stock_ids)
         selected_n = len(self.selected_stock_ids)
-        self.stock_features_scaled = self.stock_features_scaled[:selected_n]
-        self.stock_features_raw = self.stock_features_raw[:selected_n]
-        self.price_array = self.price_array[:selected_n]
 
         self.legal_train_windows = self._count_legal_windows(self.train_days)
         self.legal_test_windows = self._count_legal_windows(self.test_days)
+        self.analysis_window_start_index = self.entry_index - self.lookback
         self.available_analysis_windows = int(
-            self.parsed_t >= self.analysis_exit_day and self.lookback == self.train_days
+            0 <= self.analysis_window_start_index
+            and self.entry_index < self.exit_index
+            and self.exit_index < self.parsed_t
         )
 
         self.metadata = PanelMetadata(
@@ -340,9 +341,13 @@ class PortfolioPanelDataset:
 
     def get_analysis_window(self) -> dict[str, np.ndarray]:
         if self.available_analysis_windows != 1:
-            raise RuntimeError("Exactly one cross-boundary analysis window is expected for this diagnostic baseline.")
+            raise RuntimeError(
+                "The configured analysis window is unavailable. "
+                f"entry_day={self.analysis_entry_day}, exit_day={self.analysis_exit_day}, "
+                f"lookback={self.lookback}, total_days={self.parsed_t}."
+            )
 
-        window = self.get_window(start_index=0)
+        window = self.get_window(start_index=self.analysis_window_start_index)
         return {
             "x_stock": window["x_stock"][np.newaxis, ...],
             "x_market": window["x_market"][np.newaxis, ...],

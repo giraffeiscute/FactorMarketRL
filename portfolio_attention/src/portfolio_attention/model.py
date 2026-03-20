@@ -17,15 +17,16 @@ class PortfolioAttentionModel(nn.Module):
     Stock identity position is applied as `x_{s,t} = [z_{s,t}; e_s]`.
     """
 
-    def __init__(self, config: ModelConfig) -> None:
+    def __init__(self, config: ModelConfig, *, num_stocks: int) -> None:
         super().__init__()
-        if config.num_stocks is None:
-            raise ValueError("ModelConfig.num_stocks must be set before model construction.")
+        if num_stocks <= 0:
+            raise ValueError("num_stocks must be positive before model construction.")
         attention_input_dim = config.cross_sectional_dim + config.stock_id_embedding_dim
         if attention_input_dim % config.attention_heads != 0:
             raise ValueError("attention_input_dim must be divisible by attention_heads.")
 
         self.config = config
+        self.num_stocks = num_stocks
         self.time_position_mode = "add"
         self.id_position_mode = "concat"
 
@@ -58,7 +59,7 @@ class PortfolioAttentionModel(nn.Module):
             config.stock_temporal_dim + config.market_temporal_dim,
             config.cross_sectional_dim,
         )
-        self.stock_id_embedding = nn.Embedding(config.num_stocks, config.stock_id_embedding_dim)
+        self.stock_id_embedding = nn.Embedding(num_stocks, config.stock_id_embedding_dim)
         self.stock_attention = nn.MultiheadAttention(
             embed_dim=attention_input_dim,
             num_heads=config.attention_heads,
@@ -112,6 +113,10 @@ class PortfolioAttentionModel(nn.Module):
         assert stock_feature_dim == self.config.stock_feature_dim
         assert x_market.shape == (batch_size, lookback, self.config.market_feature_dim)
         assert stock_indices.shape == (batch_size, num_stocks)
+        if num_stocks > self.num_stocks:
+            raise ValueError(
+                f"Received batch with num_stocks={num_stocks}, but model was constructed for {self.num_stocks} stocks."
+            )
 
         stock_flat = x_stock.reshape(batch_size * num_stocks, lookback, stock_feature_dim)
         stock_content = self.stock_input_proj(stock_flat)
