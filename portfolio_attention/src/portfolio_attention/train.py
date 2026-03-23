@@ -14,7 +14,13 @@ from tqdm.auto import tqdm
 
 if __package__ is None or __package__ == "":
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-    from portfolio_attention.config import DataConfig, ModelConfig, PathsConfig, TrainConfig
+    from portfolio_attention.config import (
+        DataConfig,
+        DiagnosticConfig,
+        ModelConfig,
+        PathsConfig,
+        TrainConfig,
+    )
     from portfolio_attention.dataset import PortfolioPanelDataset
     from portfolio_attention.evaluate import run_diagnostic_evaluation
     from portfolio_attention.losses import build_loss
@@ -27,12 +33,15 @@ if __package__ is None or __package__ == "":
         set_seed,
     )
 else:
-    from .config import DataConfig, ModelConfig, PathsConfig, TrainConfig
+    from .config import DataConfig, DiagnosticConfig, ModelConfig, PathsConfig, TrainConfig
     from .dataset import PortfolioPanelDataset
     from .evaluate import run_diagnostic_evaluation
     from .losses import build_loss
     from .model import PortfolioAttentionModel
     from .utils import append_log, ensure_output_dirs, resolve_device, save_json, set_seed
+
+
+TERMINAL_EXCLUDED_KEYS = {"metadata", "top_k_stock_weights", "history", "final_backtest"}
 
 def _serialize_config(config: object) -> dict:
     serialized = asdict(config)  # type: ignore[arg-type]
@@ -53,6 +62,22 @@ def _resolve_model_config(model_config: ModelConfig, dataset: PortfolioPanelData
     return replace(model_config, lookback=dataset.model_lookback)
 
 
+def _build_terminal_summary(payload: dict[str, Any]) -> dict[str, Any]:
+    summary = {
+        key: value
+        for key, value in payload.items()
+        if key not in TERMINAL_EXCLUDED_KEYS
+    }
+    final_backtest = payload.get("final_backtest")
+    if isinstance(final_backtest, dict):
+        summary["final_backtest"] = {
+            key: value
+            for key, value in final_backtest.items()
+            if key not in {"metadata", "top_k_stock_weights", "all_stock_weights", "allocation_groups"}
+        }
+    return summary
+
+
 def _append_dataset_split_summary(log_path: Path, dataset: PortfolioPanelDataset) -> None:
     metadata = dataset.metadata
     append_log(
@@ -60,17 +85,25 @@ def _append_dataset_split_summary(log_path: Path, dataset: PortfolioPanelDataset
         (
             "Dataset split summary: "
             f"total_num_days={metadata.total_num_days} "
+            f"train_split_ratio={metadata.train_split_ratio:.4f} "
+            f"validation_split_ratio={metadata.validation_split_ratio:.4f} "
+            f"backtest_split_ratio={metadata.backtest_split_ratio:.4f} "
             f"train_split_length={metadata.train_split_length} "
-            f"test_split_length={metadata.test_split_length} "
+            f"validation_split_length={metadata.validation_split_length} "
+            f"backtest_split_length={metadata.backtest_split_length} "
             f"analysis_horizon_days={metadata.analysis_horizon_days} "
             f"train_horizon_start_index={metadata.train_horizon_start_index} "
             f"train_horizon_end_index={metadata.train_horizon_end_index} "
-            f"test_horizon_start_index={metadata.test_horizon_start_index} "
-            f"test_horizon_end_index={metadata.test_horizon_end_index} "
+            f"validation_horizon_start_index={metadata.validation_horizon_start_index} "
+            f"validation_horizon_end_index={metadata.validation_horizon_end_index} "
+            f"backtest_horizon_start_index={metadata.backtest_horizon_start_index} "
+            f"backtest_horizon_end_index={metadata.backtest_horizon_end_index} "
             f"dynamic_train_lookback_length={metadata.dynamic_train_lookback_length} "
-            f"dynamic_test_lookback_length={metadata.dynamic_test_lookback_length} "
+            f"dynamic_validation_lookback_length={metadata.dynamic_validation_lookback_length} "
+            f"dynamic_backtest_lookback_length={metadata.dynamic_backtest_lookback_length} "
             f"train_window_count={metadata.train_window_count} "
-            f"test_window_count={metadata.test_window_count}"
+            f"validation_window_count={metadata.validation_window_count} "
+            f"backtest_window_count={metadata.backtest_window_count}"
         ),
     )
 
@@ -141,7 +174,7 @@ def _evaluate_epoch(
         total_samples += batch_size
 
     if total_samples == 0:
-        raise RuntimeError("Validation loader produced no samples.")
+        raise RuntimeError("Evaluation loader produced no samples.")
 
     return total_loss / total_samples, total_return / total_samples
 
@@ -164,19 +197,17 @@ def run_diagnostic_training(
         lr=train_config.learning_rate,
         weight_decay=train_config.weight_decay,
     )
-    batch = dataset.get_analysis_batch(device=device)
+    batch = dataset.get_backtest_batch(device=device)
 
     metrics: dict[str, float | int | bool | str | dict] = {
         "mode": "diagnostic",
         "device": str(device),
         "diagnostic_only": True,
+        "evaluation_split": "backtest",
         "loaded_feature_columns": {
             "stock": dataset.loaded_stock_feature_columns,
             "market": dataset.loaded_market_feature_columns,
         },
-        "legal_train_windows": dataset.metadata.legal_train_windows,
-        "legal_test_windows": dataset.metadata.legal_test_windows,
-        "analysis_windows": dataset.metadata.available_analysis_windows,
         "selected_num_stocks": dataset.metadata.selected_num_stocks,
     }
 
@@ -192,7 +223,7 @@ def run_diagnostic_training(
     _append_dataset_split_summary(log_path, dataset)
     append_log(
         log_path,
-        "Running diagnostic mode on the single fixed test sample defined by the test-split tail horizon.",
+        "Running diagnostic mode on the single fixed backtest sample defined by the backtest-split tail horizon.",
     )
 
     loss_value = None
@@ -252,12 +283,13 @@ def run_epoch_training(
     device = resolve_device(train_config.device)
 
     dataset = PortfolioPanelDataset(data_config)
-    train_dataset, val_dataset = dataset.build_train_val_datasets()
-    if len(train_dataset) == 0 or len(val_dataset) == 0:
+    train_dataset, validation_dataset, backtest_dataset = dataset.build_train_validation_backtest_datasets()
+    if len(train_dataset) == 0 or len(validation_dataset) == 0 or len(backtest_dataset) == 0:
         raise RuntimeError(
-            "Train mode requires at least one train window and one validation window. "
-            "Use diagnostic mode for single-window analysis."
+            "Train mode requires exactly one train sample, one validation sample, and one backtest sample."
         )
+    if train_config.epoch_print_interval <= 0:
+        raise ValueError("TrainConfig.epoch_print_interval must be positive.")
 
     resolved_model_config = _resolve_model_config(model_config, dataset)
     model = PortfolioAttentionModel(resolved_model_config, num_stocks=dataset.num_stocks).to(device)
@@ -272,11 +304,11 @@ def run_epoch_training(
     train_loader = DataLoader(
         train_dataset,
         batch_size=train_config.batch_size,
-        shuffle=True,
+        shuffle=False,
         generator=generator,
     )
-    val_loader = DataLoader(
-        val_dataset,
+    validation_loader = DataLoader(
+        validation_dataset,
         batch_size=train_config.batch_size,
         shuffle=False,
     )
@@ -295,7 +327,8 @@ def run_epoch_training(
         log_path,
         (
             "Running epoch-based train mode with "
-            f"train_windows={len(train_dataset)} val_windows={len(val_dataset)} "
+            f"train_windows={len(train_dataset)} validation_windows={len(validation_dataset)} "
+            f"backtest_windows={len(backtest_dataset)} "
             f"batch_size={train_config.batch_size} num_epochs={train_config.num_epochs}."
         ),
     )
@@ -336,7 +369,7 @@ def run_epoch_training(
 
             train_loss = total_train_loss / total_train_samples
             train_return = total_train_return / total_train_samples
-            val_loss, val_return = _evaluate_epoch(model, val_loader, device, train_config.loss_name)
+            val_loss, val_return = _evaluate_epoch(model, validation_loader, device, train_config.loss_name)
 
             epoch_metrics: dict[str, float | int] = {
                 "epoch": epoch,
@@ -346,7 +379,7 @@ def run_epoch_training(
                 "val_portfolio_return": val_return,
             }
             epochs_completed = epoch
-
+            best_checkpoint_updated = False
 
             epoch_bar.set_description(f"Epoch {epoch}/{train_config.num_epochs}")
             epoch_bar.set_postfix(
@@ -369,6 +402,7 @@ def run_epoch_training(
                 best_val_loss = val_loss
                 best_epoch = epoch
                 epochs_without_improvement = 0
+                best_checkpoint_updated = True
                 torch.save(
                     _build_checkpoint_payload(
                         model=model,
@@ -379,12 +413,17 @@ def run_epoch_training(
                         dataset=dataset,
                         epoch=epoch,
                         best_val_loss=best_val_loss,
-                        extra_metrics=epoch_metrics,
+                        extra_metrics={
+                            **epoch_metrics,
+                            "best_checkpoint_updated": best_checkpoint_updated,
+                            "epochs_without_improvement": epochs_without_improvement,
+                        },
                     ),
                     best_checkpoint_path,
                 )
             else:
                 epochs_without_improvement += 1
+
 
             torch.save(
                 _build_checkpoint_payload(
@@ -396,14 +435,16 @@ def run_epoch_training(
                     dataset=dataset,
                     epoch=epoch,
                     best_val_loss=best_val_loss,
-                    extra_metrics=epoch_metrics,
+                    extra_metrics={
+                        **epoch_metrics,
+                        "best_checkpoint_updated": best_checkpoint_updated,
+                        "epochs_without_improvement": epochs_without_improvement,
+                    },
                 ),
                 last_checkpoint_path,
             )
 
             should_stop_early = epochs_without_improvement >= train_config.early_stopping_patience
-            if train_config.epoch_print_interval <= 0:
-                raise ValueError("TrainConfig.epoch_print_interval must be positive.")
             if epoch % train_config.epoch_print_interval == 0 or epoch == train_config.num_epochs or should_stop_early:
                 tqdm.write(
                     (
@@ -428,6 +469,16 @@ def run_epoch_training(
     if best_epoch == 0:
         raise RuntimeError("Train loop did not record a best checkpoint.")
 
+    append_log(log_path, f"Loading best checkpoint for final backtest evaluation: {best_checkpoint_path}.")
+    final_backtest = run_diagnostic_evaluation(
+        data_config=data_config,
+        paths=paths,
+        checkpoint_path=best_checkpoint_path,
+        device_name=train_config.device,
+        diagnostic_config=DiagnosticConfig(),
+        diagnostic_only=False,
+    )
+
     metrics: dict[str, Any] = {
         "mode": "train",
         "device": str(device),
@@ -442,24 +493,17 @@ def run_epoch_training(
         "epochs_completed": epochs_completed,
         "best_epoch": best_epoch,
         "best_val_loss": best_val_loss,
-
         "train_window_count": len(train_dataset),
-        "val_window_count": len(val_dataset),
+        "validation_window_count": len(validation_dataset),
+        "backtest_window_count": len(backtest_dataset),
         "early_stopping_patience": train_config.early_stopping_patience,
         "stopped_early": epochs_completed < train_config.num_epochs,
         "best_checkpoint_path": str(best_checkpoint_path),
         "last_checkpoint_path": str(last_checkpoint_path),
+        "final_backtest": final_backtest,
         "metadata": dataset.metadata.as_dict(),
-
     }
     save_json(metrics, paths.metrics_dir / "train_metrics.json")
-    append_log(log_path, f"Refreshing predictions from best checkpoint: {best_checkpoint_path}.")
-    run_diagnostic_evaluation(
-        data_config=data_config,
-        paths=paths,
-        checkpoint_path=best_checkpoint_path,
-        device_name=train_config.device,
-    )
     return metrics
 
 
@@ -551,7 +595,7 @@ def main() -> None:
     paths = PathsConfig()
     data_config, train_config = resolve_runtime_configs_from_args(args)
     metrics = run_training(data_config, ModelConfig(), train_config, paths)
-    print(metrics)
+    print(_build_terminal_summary(metrics))
 
 
 if __name__ == "__main__":

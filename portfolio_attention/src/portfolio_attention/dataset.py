@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+import math
 import re
 from pathlib import Path
 from typing import Any
@@ -89,7 +90,7 @@ class Standardizer:
 
 @dataclass
 class PanelMetadata:
-    """Dataset summary for the single fixed train/test sample rule."""
+    """Dataset summary for the three-split single-sample rule."""
 
     source_path: str
     parsed_n: int
@@ -98,23 +99,34 @@ class PanelMetadata:
     csv_unique_times: int
     total_num_days: int
     train_days: int
-    test_days: int
+    validation_days: int
+    backtest_days: int
+    train_split_ratio: float
+    validation_split_ratio: float
+    backtest_split_ratio: float
+    train_split_start_index: int
+    train_split_end_index: int
+    validation_split_start_index: int
+    validation_split_end_index: int
+    backtest_split_start_index: int
+    backtest_split_end_index: int
     train_split_length: int
-    test_split_length: int
+    validation_split_length: int
+    backtest_split_length: int
     analysis_horizon_days: int
     train_horizon_start_index: int
     train_horizon_end_index: int
-    test_horizon_start_index: int
-    test_horizon_end_index: int
+    validation_horizon_start_index: int
+    validation_horizon_end_index: int
+    backtest_horizon_start_index: int
+    backtest_horizon_end_index: int
     dynamic_train_lookback_length: int
-    dynamic_test_lookback_length: int
+    dynamic_validation_lookback_length: int
+    dynamic_backtest_lookback_length: int
     model_lookback: int
-    legal_train_windows: int
-    legal_test_windows: int
     train_window_count: int
-    test_window_count: int
-    available_analysis_windows: int
-    analysis_only: bool
+    validation_window_count: int
+    backtest_window_count: int
     selected_num_stocks: int
     effective_time_steps: int
 
@@ -156,11 +168,11 @@ class PortfolioWindowDataset(Dataset):
 
 
 class PortfolioPanelDataset:
-    """Loads the long-format panel and builds the fixed train/test samples.
+    """Loads the long-format panel and builds fixed train/validation/backtest samples.
 
-    The project now uses one and only one train sample plus one and only one
-    test sample. Each sample keeps the full cross-sectional stock universe and
-    uses all history before its horizon start as lookback.
+    Each split contributes exactly one cross-sectional sample. A sample keeps the
+    full stock universe intact, uses the split's final `analysis_horizon_days`
+    as its horizon, and uses every day before that horizon as lookback.
     """
 
     def __init__(self, config: DataConfig) -> None:
@@ -207,46 +219,120 @@ class PortfolioPanelDataset:
             horizon_end_index=horizon_end_index,
         )
 
+    def _validate_split_ratios(self) -> None:
+        ratio_sum = (
+            float(self.config.train_split_ratio)
+            + float(self.config.validation_split_ratio)
+            + float(self.config.backtest_split_ratio)
+        )
+        if not math.isclose(ratio_sum, 1.0, rel_tol=0.0, abs_tol=1e-9):
+            raise ValueError(
+                "DataConfig train/validation/backtest split ratios must sum to 1.0. "
+                f"Received train_split_ratio={self.config.train_split_ratio}, "
+                f"validation_split_ratio={self.config.validation_split_ratio}, "
+                f"backtest_split_ratio={self.config.backtest_split_ratio}, "
+                f"sum={ratio_sum:.12f}."
+            )
+        for name, value in (
+            ("train_split_ratio", self.config.train_split_ratio),
+            ("validation_split_ratio", self.config.validation_split_ratio),
+            ("backtest_split_ratio", self.config.backtest_split_ratio),
+        ):
+            if value <= 0.0:
+                raise ValueError(f"DataConfig.{name} must be positive, received {value}.")
+
+    def _resolve_split_lengths(self) -> None:
+        self._validate_split_ratios()
+
+        self.train_split_end_index = int(self.parsed_t * float(self.config.train_split_ratio)) - 1
+        self.validation_split_end_index = (
+            int(self.parsed_t * float(self.config.train_split_ratio + self.config.validation_split_ratio)) - 1
+        )
+        self.backtest_split_end_index = self.parsed_t - 1
+
+        self.train_split_start_index = 0
+        self.validation_split_start_index = self.train_split_end_index + 1
+        self.backtest_split_start_index = self.validation_split_end_index + 1
+
+        self.train_days = self.train_split_end_index - self.train_split_start_index + 1
+        self.validation_days = self.validation_split_end_index - self.validation_split_start_index + 1
+        self.backtest_days = self.backtest_split_end_index - self.backtest_split_start_index + 1
+
+        if self.train_days <= 0 or self.validation_days <= 0 or self.backtest_days <= 0:
+            raise ValueError(
+                "Configured split ratios must produce non-empty train, validation, and backtest splits. "
+                f"Received train_days={self.train_days}, "
+                f"validation_days={self.validation_days}, backtest_days={self.backtest_days}."
+            )
+
+    @staticmethod
+    def _validate_split_length(
+        *,
+        split_name: str,
+        split_length: int,
+        analysis_horizon_days: int,
+    ) -> None:
+        if split_length <= analysis_horizon_days:
+            raise ValueError(
+                f"{split_name}_split_length={split_length} must be greater than analysis_horizon_days="
+                f"{analysis_horizon_days} so the {split_name} split can contain the full horizon and leave a "
+                "valid lookback."
+            )
+
     def _initialize_single_sample_windows(self) -> None:
         analysis_horizon_days = int(self.config.analysis_horizon_days)
         if analysis_horizon_days <= 0:
             raise ValueError("analysis_horizon_days must be positive.")
 
-        train_split_length = self.train_days
-        test_split_length = self.test_days
-        if train_split_length <= analysis_horizon_days:
-            raise ValueError(
-                f"train_split_length={train_split_length} must be greater than analysis_horizon_days="
-                f"{analysis_horizon_days} so the train split can contain the full horizon and leave a valid lookback."
-            )
-        if test_split_length <= analysis_horizon_days:
-            raise ValueError(
-                f"test_split_length={test_split_length} must be greater than analysis_horizon_days="
-                f"{analysis_horizon_days} so the test split can contain the full horizon and leave a valid lookback."
-            )
+        self._validate_split_length(
+            split_name="train",
+            split_length=self.train_days,
+            analysis_horizon_days=analysis_horizon_days,
+        )
+        self._validate_split_length(
+            split_name="validation",
+            split_length=self.validation_days,
+            analysis_horizon_days=analysis_horizon_days,
+        )
+        self._validate_split_length(
+            split_name="backtest",
+            split_length=self.backtest_days,
+            analysis_horizon_days=analysis_horizon_days,
+        )
 
         self.analysis_horizon_days = analysis_horizon_days
-        self.train_horizon_start_index = train_split_length - analysis_horizon_days
-        self.train_horizon_end_index = train_split_length - 1
-        self.test_horizon_start_index = self.parsed_t - analysis_horizon_days
-        self.test_horizon_end_index = self.parsed_t - 1
+        self.train_horizon_start_index = self.train_split_end_index - analysis_horizon_days + 1
+        self.train_horizon_end_index = self.train_split_end_index
+        self.validation_horizon_start_index = self.validation_split_end_index - analysis_horizon_days + 1
+        self.validation_horizon_end_index = self.validation_split_end_index
+        self.backtest_horizon_start_index = self.backtest_split_end_index - analysis_horizon_days + 1
+        self.backtest_horizon_end_index = self.backtest_split_end_index
+
         self.dynamic_train_lookback_length = self.train_horizon_start_index
-        self.dynamic_test_lookback_length = self.test_horizon_start_index
+        self.dynamic_validation_lookback_length = self.validation_horizon_start_index
+        self.dynamic_backtest_lookback_length = self.backtest_horizon_start_index
 
         if self.dynamic_train_lookback_length <= 0:
             raise ValueError(
                 "dynamic_train_lookback_length must be positive under the fixed single-sample rule. "
                 f"Received {self.dynamic_train_lookback_length}."
             )
-        if self.dynamic_test_lookback_length <= 0:
+        if self.dynamic_validation_lookback_length <= 0:
             raise ValueError(
-                "dynamic_test_lookback_length must be positive under the fixed single-sample rule. "
-                f"Received {self.dynamic_test_lookback_length}."
+                "dynamic_validation_lookback_length must be positive under the fixed single-sample rule. "
+                f"Received {self.dynamic_validation_lookback_length}."
             )
-        if self.train_horizon_end_index >= self.train_days:
+        if self.dynamic_backtest_lookback_length <= 0:
+            raise ValueError(
+                "dynamic_backtest_lookback_length must be positive under the fixed single-sample rule. "
+                f"Received {self.dynamic_backtest_lookback_length}."
+            )
+        if self.train_horizon_start_index < self.train_split_start_index:
             raise ValueError("Train horizon must lie fully inside the train split.")
-        if self.test_horizon_start_index < self.train_days:
-            raise ValueError("Test horizon must lie fully inside the test split.")
+        if self.validation_horizon_start_index < self.validation_split_start_index:
+            raise ValueError("Validation horizon must lie fully inside the validation split.")
+        if self.backtest_horizon_start_index < self.backtest_split_start_index:
+            raise ValueError("Backtest horizon must lie fully inside the backtest split.")
 
         train_spec = self._build_window_spec(
             split_name="train",
@@ -254,23 +340,28 @@ class PortfolioPanelDataset:
             horizon_end_index=self.train_horizon_end_index,
             lookback_length=self.dynamic_train_lookback_length,
         )
-        test_spec = self._build_window_spec(
-            split_name="test",
-            horizon_start_index=self.test_horizon_start_index,
-            horizon_end_index=self.test_horizon_end_index,
-            lookback_length=self.dynamic_test_lookback_length,
+        validation_spec = self._build_window_spec(
+            split_name="validation",
+            horizon_start_index=self.validation_horizon_start_index,
+            horizon_end_index=self.validation_horizon_end_index,
+            lookback_length=self.dynamic_validation_lookback_length,
+        )
+        backtest_spec = self._build_window_spec(
+            split_name="backtest",
+            horizon_start_index=self.backtest_horizon_start_index,
+            horizon_end_index=self.backtest_horizon_end_index,
+            lookback_length=self.dynamic_backtest_lookback_length,
         )
 
         self.train_window_specs = [train_spec]
-        self.test_window_specs = [test_spec]
-        self.analysis_window_spec = test_spec
+        self.validation_window_specs = [validation_spec]
+        self.backtest_window_specs = [backtest_spec]
+        self.backtest_window_spec = backtest_spec
         self.model_lookback = max(
             self.dynamic_train_lookback_length,
-            self.dynamic_test_lookback_length,
+            self.dynamic_validation_lookback_length,
+            self.dynamic_backtest_lookback_length,
         )
-        self.legal_train_windows = 1
-        self.legal_test_windows = 1
-        self.available_analysis_windows = 1
 
     def _load(self) -> None:
         header = pd.read_csv(self.csv_path, nrows=0).columns.tolist()
@@ -340,15 +431,7 @@ class PortfolioPanelDataset:
         self.stock_features_raw = full_stock_features_raw[selected_stock_indices]
         self.price_array = self.stock_features_raw[..., -1].copy()
 
-        if not 0.0 < self.config.train_ratio < 1.0:
-            raise ValueError("DataConfig.train_ratio must be between 0 and 1.")
-        self.train_days = int(self.parsed_t * self.config.train_ratio)
-        self.test_days = self.parsed_t - self.train_days
-        if self.train_days <= 0 or self.test_days <= 0:
-            raise ValueError(
-                "train_ratio must produce non-empty train and test splits. "
-                f"Received train_days={self.train_days}, test_days={self.test_days}."
-            )
+        self._resolve_split_lengths()
 
         self.stock_scaler = Standardizer().fit(
             self.stock_features_raw[:, : self.train_days, :].reshape(-1, len(STOCK_FEATURE_COLUMNS))
@@ -367,23 +450,34 @@ class PortfolioPanelDataset:
             csv_unique_times=len(self.time_index),
             total_num_days=self.parsed_t,
             train_days=self.train_days,
-            test_days=self.test_days,
+            validation_days=self.validation_days,
+            backtest_days=self.backtest_days,
+            train_split_ratio=float(self.config.train_split_ratio),
+            validation_split_ratio=float(self.config.validation_split_ratio),
+            backtest_split_ratio=float(self.config.backtest_split_ratio),
+            train_split_start_index=self.train_split_start_index,
+            train_split_end_index=self.train_split_end_index,
+            validation_split_start_index=self.validation_split_start_index,
+            validation_split_end_index=self.validation_split_end_index,
+            backtest_split_start_index=self.backtest_split_start_index,
+            backtest_split_end_index=self.backtest_split_end_index,
             train_split_length=self.train_days,
-            test_split_length=self.test_days,
+            validation_split_length=self.validation_days,
+            backtest_split_length=self.backtest_days,
             analysis_horizon_days=self.analysis_horizon_days,
             train_horizon_start_index=self.train_horizon_start_index,
             train_horizon_end_index=self.train_horizon_end_index,
-            test_horizon_start_index=self.test_horizon_start_index,
-            test_horizon_end_index=self.test_horizon_end_index,
+            validation_horizon_start_index=self.validation_horizon_start_index,
+            validation_horizon_end_index=self.validation_horizon_end_index,
+            backtest_horizon_start_index=self.backtest_horizon_start_index,
+            backtest_horizon_end_index=self.backtest_horizon_end_index,
             dynamic_train_lookback_length=self.dynamic_train_lookback_length,
-            dynamic_test_lookback_length=self.dynamic_test_lookback_length,
+            dynamic_validation_lookback_length=self.dynamic_validation_lookback_length,
+            dynamic_backtest_lookback_length=self.dynamic_backtest_lookback_length,
             model_lookback=self.model_lookback,
-            legal_train_windows=self.legal_train_windows,
-            legal_test_windows=self.legal_test_windows,
             train_window_count=len(self.train_window_specs),
-            test_window_count=len(self.test_window_specs),
-            available_analysis_windows=self.available_analysis_windows,
-            analysis_only=True,
+            validation_window_count=len(self.validation_window_specs),
+            backtest_window_count=len(self.backtest_window_specs),
             selected_num_stocks=len(self.selected_stock_ids),
             effective_time_steps=self.parsed_t,
         )
@@ -428,23 +522,17 @@ class PortfolioPanelDataset:
             "stock_indices": stock_indices,
         }
 
-    def build_train_val_datasets(self) -> tuple[PortfolioWindowDataset, PortfolioWindowDataset]:
+    def build_train_validation_backtest_datasets(
+        self,
+    ) -> tuple[PortfolioWindowDataset, PortfolioWindowDataset, PortfolioWindowDataset]:
         return (
             PortfolioWindowDataset(self, list(self.train_window_specs)),
-            PortfolioWindowDataset(self, list(self.test_window_specs)),
+            PortfolioWindowDataset(self, list(self.validation_window_specs)),
+            PortfolioWindowDataset(self, list(self.backtest_window_specs)),
         )
 
-    def get_analysis_window(self) -> dict[str, np.ndarray]:
-        if self.available_analysis_windows != 1:
-            raise RuntimeError(
-                "The configured test analysis window is unavailable. "
-                f"test_horizon_start_index={self.test_horizon_start_index}, "
-                f"test_horizon_end_index={self.test_horizon_end_index}, "
-                f"lookback_length={self.analysis_window_spec.lookback_length}, "
-                f"total_num_days={self.parsed_t}."
-            )
-
-        window = self.get_window(self.analysis_window_spec)
+    def get_backtest_window(self) -> dict[str, np.ndarray]:
+        window = self.get_window(self.backtest_window_spec)
         return {
             "x_stock": window["x_stock"][np.newaxis, ...],
             "x_market": window["x_market"][np.newaxis, ...],
@@ -452,8 +540,8 @@ class PortfolioPanelDataset:
             "stock_indices": window["stock_indices"][np.newaxis, ...],
         }
 
-    def get_analysis_batch(self, device: torch.device | None = None) -> dict[str, torch.Tensor]:
-        batch = self.get_analysis_window()
+    def get_backtest_batch(self, device: torch.device | None = None) -> dict[str, torch.Tensor]:
+        batch = self.get_backtest_window()
         tensor_batch = {
             key: torch.as_tensor(value, device=device)
             for key, value in batch.items()

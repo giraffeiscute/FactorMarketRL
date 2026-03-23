@@ -15,7 +15,13 @@ import torch
 
 if __package__ is None or __package__ == "":
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-    from portfolio_attention.config import DataConfig, ModelConfig, PathsConfig, TrainConfig
+    from portfolio_attention.config import (
+        DataConfig,
+        DiagnosticConfig,
+        ModelConfig,
+        PathsConfig,
+        TrainConfig,
+    )
     from portfolio_attention.dataset import PortfolioPanelDataset
     from portfolio_attention.losses import sharpe_loss
     from portfolio_attention.model import PortfolioAttentionModel
@@ -26,7 +32,7 @@ if __package__ is None or __package__ == "":
         state_id_from_csv_path,
     )
 else:
-    from .config import DataConfig, ModelConfig, PathsConfig, TrainConfig
+    from .config import DataConfig, DiagnosticConfig, ModelConfig, PathsConfig, TrainConfig
     from .dataset import PortfolioPanelDataset
     from .losses import sharpe_loss
     from .model import PortfolioAttentionModel
@@ -40,6 +46,8 @@ EXPORTED_TRAIN_CONFIG_KEYS = [
     "grad_clip_norm",
     "early_stopping_patience",
 ]
+
+TERMINAL_EXCLUDED_KEYS = {"metadata", "top_k_stock_weights", "all_stock_weights", "allocation_groups"}
 
 
 def _parse_source_time_to_index(raw_value: object) -> int:
@@ -84,6 +92,14 @@ def _validate_checkpoint_metadata(checkpoint: dict, dataset: PortfolioPanelDatas
         )
 
 
+def _build_terminal_summary(payload: dict[str, object]) -> dict[str, object]:
+    return {
+        key: value
+        for key, value in payload.items()
+        if key not in TERMINAL_EXCLUDED_KEYS
+    }
+
+
 def _get_aux_lookup(aux_frame: pd.DataFrame) -> dict[tuple[str, int], dict[str, object]]:
     cached_lookup = aux_frame.attrs.get("_position_lookup")
     if cached_lookup is not None:
@@ -98,7 +114,7 @@ def _get_aux_lookup(aux_frame: pd.DataFrame) -> dict[tuple[str, int], dict[str, 
         )
         raise ValueError(
             "Diagnostic export found multiple source rows for the same "
-            "(stock_id, test_horizon_start_index) keys. "
+            "(stock_id, backtest_horizon_start_index) keys. "
             f"Examples: {duplicate_rows}"
         )
 
@@ -120,7 +136,7 @@ def enrich_positions(
     metadata: dict,
     positions: list[dict[str, object]],
 ) -> list[dict]:
-    analysis_time_index = int(metadata["test_horizon_start_index"])
+    analysis_time_index = int(metadata["backtest_horizon_start_index"])
     aux_lookup = _get_aux_lookup(aux_frame)
     enriched: list[dict] = []
     for rank, position in enumerate(positions, start=1):
@@ -129,7 +145,7 @@ def enrich_positions(
         if match is None:
             raise ValueError(
                 f"Diagnostic export could not find exactly one source row for stock_id={stock_id} "
-                f"at test_horizon_start_index={analysis_time_index}."
+                f"at backtest_horizon_start_index={analysis_time_index}."
             )
         enriched.append(
             {
@@ -283,17 +299,75 @@ def save_all_stock_weights_csv(
     frame.to_csv(output_path, index=False)
 
 
+def export_allocation_artifacts(
+    *,
+    aux_frame: pd.DataFrame,
+    metadata: dict[str, object],
+    stock_ids: list[str],
+    stock_weights: torch.Tensor,
+    paths: PathsConfig,
+    source_csv_path: Path,
+    allocation_group_top_n: int,
+) -> dict[str, object]:
+    all_stock_positions = enrich_positions(
+        aux_frame=aux_frame,
+        metadata=metadata,
+        positions=build_all_stock_positions(
+            stock_ids=stock_ids,
+            stock_weights=stock_weights,
+        ),
+    )
+    grouped_allocations = group_allocations_by_state(all_stock_positions)
+    grouped_allocations_top_n = summarize_grouped_allocations(
+        grouped_allocations,
+        top_n=allocation_group_top_n,
+    )
+
+    state_id = state_id_from_csv_path(source_csv_path)
+    chart_title = f"Top {allocation_group_top_n} Allocation Groups + Others: {state_id}"
+    pie_chart_path = paths.outputs_dir / f"{state_id}_allocation_pie.png"
+    bar_chart_path = paths.outputs_dir / f"{state_id}_allocation_bar.png"
+    all_stock_weights_csv_path = paths.predictions_dir / f"{state_id}_all_stock_weights.csv"
+
+    save_all_stock_weights_csv(all_stock_positions, all_stock_weights_csv_path)
+    render_allocation_pie_chart(
+        grouped_allocations=grouped_allocations_top_n,
+        output_path=pie_chart_path,
+        title=chart_title,
+    )
+    render_allocation_bar_chart(
+        grouped_allocations=grouped_allocations_top_n,
+        output_path=bar_chart_path,
+        title=chart_title,
+    )
+
+    return {
+        "source_path": state_id,
+        "all_stock_weights": all_stock_positions,
+        "all_stock_weights_csv": str(all_stock_weights_csv_path),
+        "grouped_allocations": grouped_allocations,
+        "grouped_allocations_top_n": grouped_allocations_top_n,
+        "allocation_groups_top_n_plus_others": grouped_allocations_top_n,
+        "allocation_group_top_n": allocation_group_top_n,
+        "allocation_pie_chart": str(pie_chart_path),
+        "allocation_bar_chart": str(bar_chart_path),
+    }
+
+
 def run_diagnostic_evaluation(
     data_config: DataConfig,
     paths: PathsConfig,
     checkpoint_path: Path | None = None,
     device_name: str = "auto",
     top_k: int = 5,
+    diagnostic_config: DiagnosticConfig | None = None,
+    diagnostic_only: bool = True,
 ) -> dict:
     ensure_output_dirs(paths)
     device = resolve_device(device_name)
+    resolved_diagnostic_config = diagnostic_config or DiagnosticConfig()
     dataset = PortfolioPanelDataset(data_config)
-    batch = dataset.get_analysis_batch(device=device)
+    batch = dataset.get_backtest_batch(device=device)
 
     resolved_checkpoint = checkpoint_path or (paths.checkpoints_dir / TrainConfig().checkpoint_name)
     checkpoint = torch.load(resolved_checkpoint, map_location=device, weights_only=False)
@@ -314,7 +388,8 @@ def run_diagnostic_evaluation(
     stock_weights = outputs["stock_weights"][0].detach().cpu()
     cash_weight = float(outputs["cash_weight"][0].detach().cpu().item())
     portfolio_return = float(outputs["portfolio_return"][0].detach().cpu().item())
-    sharpe_like = float((-sharpe_loss(outputs["portfolio_return"]).detach().cpu().item()))
+    checkpoint_train_config = checkpoint.get("train_config", {})
+    checkpoint_loss_name = str(checkpoint_train_config.get("loss_name", "")).lower()
     top_k = min(top_k, dataset.num_stocks)
     top_values, top_indices = torch.topk(stock_weights, k=top_k)
     top_positions = [
@@ -327,47 +402,32 @@ def run_diagnostic_evaluation(
 
     source_csv_path = Path(data_config.csv_path)
     aux_frame = _load_aux_frame(source_csv_path)
+    metadata = dataset.metadata.as_dict()
     enriched_top_positions = enrich_positions(
         aux_frame=aux_frame,
-        metadata=dataset.metadata.as_dict(),
+        metadata=metadata,
         positions=top_positions,
     )
-    all_stock_positions = enrich_positions(
+    allocation_payload = export_allocation_artifacts(
         aux_frame=aux_frame,
-        metadata=dataset.metadata.as_dict(),
-        positions=build_all_stock_positions(
-            stock_ids=dataset.selected_stock_ids,
-            stock_weights=stock_weights,
-        ),
-    )
-    grouped_allocations = group_allocations_by_state(all_stock_positions)
-    grouped_allocations_top10 = summarize_grouped_allocations(grouped_allocations, top_n=10)
-    state_id = state_id_from_csv_path(source_csv_path)
-    pie_chart_path = paths.outputs_dir / f"{state_id}_allocation_pie.png"
-    bar_chart_path = paths.outputs_dir / f"{state_id}_allocation_bar.png"
-    all_stock_weights_csv_path = paths.predictions_dir / f"{state_id}_all_stock_weights.csv"
-    save_all_stock_weights_csv(all_stock_positions, all_stock_weights_csv_path)
-    render_allocation_pie_chart(
-        grouped_allocations=grouped_allocations_top10,
-        output_path=pie_chart_path,
-        title=f"Top 10 Allocation Groups + Others: {state_id}",
-    )
-    render_allocation_bar_chart(
-        grouped_allocations=grouped_allocations_top10,
-        output_path=bar_chart_path,
-        title=f"Top 10 Allocation Groups + Others: {state_id}",
+        metadata=metadata,
+        stock_ids=dataset.selected_stock_ids,
+        stock_weights=stock_weights,
+        paths=paths,
+        source_csv_path=source_csv_path,
+        allocation_group_top_n=resolved_diagnostic_config.allocation_group_top_n,
     )
 
     prediction_payload = {
-        "source_path": state_id,
-        "diagnostic_only": True,
+        "source_path": allocation_payload["source_path"],
+        "diagnostic_only": diagnostic_only,
+        "evaluation_split": "backtest",
         "device": str(device),
         "train_config": _extract_exported_train_config(checkpoint),
         "portfolio_return": portfolio_return,
         "average_portfolio_return": portfolio_return,
         "cash_weight": cash_weight,
         "average_cash_weight": cash_weight,
-        "sharpe_like": sharpe_like,
         "metadata": {
             key: value
             for key, value in dataset.metadata.as_dict().items()
@@ -375,14 +435,20 @@ def run_diagnostic_evaluation(
         },
         "top_k_stock_weights": enriched_top_positions,
     }
+    if checkpoint_loss_name == "sharpe":
+        prediction_payload["sharpe_like"] = float(
+            (-sharpe_loss(outputs["portfolio_return"]).detach().cpu().item())
+        )
     metrics_payload = {
         **prediction_payload,
-        "all_stock_weights": all_stock_positions,
-        "all_stock_weights_csv": str(all_stock_weights_csv_path),
-        "allocation_groups": grouped_allocations,
-        "allocation_groups_top10_plus_others": grouped_allocations_top10,
-        "allocation_pie_chart": str(pie_chart_path),
-        "allocation_bar_chart": str(bar_chart_path),
+        "all_stock_weights": allocation_payload["all_stock_weights"],
+        "all_stock_weights_csv": allocation_payload["all_stock_weights_csv"],
+        "allocation_groups": allocation_payload["grouped_allocations"],
+        "grouped_allocations_top_n": allocation_payload["grouped_allocations_top_n"],
+        "allocation_groups_top_n_plus_others": allocation_payload["allocation_groups_top_n_plus_others"],
+        "allocation_group_top_n": allocation_payload["allocation_group_top_n"],
+        "allocation_pie_chart": allocation_payload["allocation_pie_chart"],
+        "allocation_bar_chart": allocation_payload["allocation_bar_chart"],
     }
     legacy_csv_path = paths.predictions_dir / "diagnostic_predictions.csv"
     if legacy_csv_path.exists():
@@ -394,7 +460,7 @@ def run_diagnostic_evaluation(
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run diagnostic evaluation for portfolio_attention.")
-    parser.add_argument("--mode", default="diagnostic")
+    parser.add_argument("--mode", default="diagnostic", choices=["diagnostic", "train"])
     parser.add_argument("--data-path", type=Path, default=None)
     parser.add_argument("--checkpoint", type=Path, default=None)
     parser.add_argument("--device", default="auto")
@@ -411,14 +477,28 @@ def main() -> None:
         csv_path=args.data_path or default_data_config.csv_path,
         num_stocks=args.num_stocks,
     )
-    payload = run_diagnostic_evaluation(
-        data_config=data_config,
-        paths=paths,
-        checkpoint_path=args.checkpoint,
-        device_name=args.device,
-        top_k=args.top_k,
-    )
-    print(payload)
+    if args.mode == "train":
+        if args.checkpoint is not None:
+            raise ValueError("--checkpoint is only supported when --mode=diagnostic.")
+        if __package__ is None or __package__ == "":
+            from portfolio_attention.train import run_training
+        else:
+            from .train import run_training
+        payload = run_training(
+            data_config=data_config,
+            model_config=ModelConfig(),
+            train_config=TrainConfig(mode="train", device=args.device),
+            paths=paths,
+        )
+    else:
+        payload = run_diagnostic_evaluation(
+            data_config=data_config,
+            paths=paths,
+            checkpoint_path=args.checkpoint,
+            device_name=args.device,
+            top_k=args.top_k,
+        )
+    print(_build_terminal_summary(payload))
 
 
 if __name__ == "__main__":
