@@ -41,7 +41,25 @@ else:
     from .utils import append_log, ensure_output_dirs, resolve_device, save_json, set_seed
 
 
-TERMINAL_EXCLUDED_KEYS = {"metadata", "top_k_stock_weights", "history", "final_backtest"}
+TERMINAL_SUMMARY_KEYS = [
+    "portfolio_return",
+    "cash_weight",
+    "stopped_early",
+    "best_epoch",
+    "best_val_loss",
+    "source_path",
+]
+TERMINAL_METADATA_KEYS = [
+    "total_num_days",
+    "train_days",
+    "dynamic_backtest_lookback_length",
+    "dynamic_train_lookback_length",
+    "dynamic_validation_lookback_length",
+    "validation_days",
+    "backtest_days",
+    "analysis_horizon_days",
+]
+TERMINAL_OUTPUT_ORDER = TERMINAL_SUMMARY_KEYS + TERMINAL_METADATA_KEYS
 
 def _serialize_config(config: object) -> dict:
     serialized = asdict(config)  # type: ignore[arg-type]
@@ -63,19 +81,40 @@ def _resolve_model_config(model_config: ModelConfig, dataset: PortfolioPanelData
 
 
 def _build_terminal_summary(payload: dict[str, Any]) -> dict[str, Any]:
-    summary = {
-        key: value
-        for key, value in payload.items()
-        if key not in TERMINAL_EXCLUDED_KEYS
-    }
+    summary: dict[str, Any] = {}
     final_backtest = payload.get("final_backtest")
     if isinstance(final_backtest, dict):
-        summary["final_backtest"] = {
-            key: value
-            for key, value in final_backtest.items()
-            if key not in {"metadata", "top_k_stock_weights", "all_stock_weights", "allocation_groups"}
-        }
+        for key in TERMINAL_SUMMARY_KEYS:
+            if key in final_backtest:
+                summary[key] = final_backtest[key]
+        metadata = final_backtest.get("metadata")
+        if isinstance(metadata, dict):
+            for key in TERMINAL_METADATA_KEYS:
+                if key in metadata:
+                    summary[key] = metadata[key]
+    else:
+        for key in TERMINAL_SUMMARY_KEYS:
+            if key in payload:
+                summary[key] = payload[key]
+        metadata = payload.get("metadata")
+        if isinstance(metadata, dict):
+            for key in TERMINAL_METADATA_KEYS:
+                if key in metadata:
+                    summary[key] = metadata[key]
+    for key in ("stopped_early", "best_epoch", "best_val_loss"):
+        if key in payload:
+            summary[key] = payload[key]
     return summary
+
+
+def _format_terminal_summary(payload: dict[str, Any]) -> str:
+    summary = _build_terminal_summary(payload)
+    lines = [
+        f"{key}: {summary[key]}"
+        for key in TERMINAL_OUTPUT_ORDER
+        if key in summary
+    ]
+    return "\n".join(lines)
 
 
 def _append_dataset_split_summary(log_path: Path, dataset: PortfolioPanelDataset) -> None:
@@ -595,7 +634,7 @@ def main() -> None:
     paths = PathsConfig()
     data_config, train_config = resolve_runtime_configs_from_args(args)
     metrics = run_training(data_config, ModelConfig(), train_config, paths)
-    print(_build_terminal_summary(metrics))
+    print(_format_terminal_summary(metrics))
 
 
 if __name__ == "__main__":

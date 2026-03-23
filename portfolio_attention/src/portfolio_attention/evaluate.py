@@ -47,7 +47,25 @@ EXPORTED_TRAIN_CONFIG_KEYS = [
     "early_stopping_patience",
 ]
 
-TERMINAL_EXCLUDED_KEYS = {"metadata", "top_k_stock_weights", "all_stock_weights", "allocation_groups"}
+TERMINAL_SUMMARY_KEYS = [
+    "portfolio_return",
+    "cash_weight",
+    "stopped_early",
+    "best_epoch",
+    "best_val_loss",
+    "source_path",
+]
+TERMINAL_METADATA_KEYS = [
+    "total_num_days",
+    "train_days",
+    "dynamic_backtest_lookback_length",
+    "dynamic_train_lookback_length",
+    "dynamic_validation_lookback_length",
+    "validation_days",
+    "backtest_days",
+    "analysis_horizon_days",
+]
+TERMINAL_OUTPUT_ORDER = TERMINAL_SUMMARY_KEYS + TERMINAL_METADATA_KEYS
 
 
 def _parse_source_time_to_index(raw_value: object) -> int:
@@ -93,11 +111,27 @@ def _validate_checkpoint_metadata(checkpoint: dict, dataset: PortfolioPanelDatas
 
 
 def _build_terminal_summary(payload: dict[str, object]) -> dict[str, object]:
-    return {
-        key: value
-        for key, value in payload.items()
-        if key not in TERMINAL_EXCLUDED_KEYS
+    summary = {
+        key: payload[key]
+        for key in TERMINAL_SUMMARY_KEYS
+        if key in payload
     }
+    metadata = payload.get("metadata")
+    if isinstance(metadata, dict):
+        for key in TERMINAL_METADATA_KEYS:
+            if key in metadata:
+                summary[key] = metadata[key]
+    return summary
+
+
+def _format_terminal_summary(payload: dict[str, object]) -> str:
+    summary = _build_terminal_summary(payload)
+    lines = [
+        f"{key}: {summary[key]}"
+        for key in TERMINAL_OUTPUT_ORDER
+        if key in summary
+    ]
+    return "\n".join(lines)
 
 
 def _get_aux_lookup(aux_frame: pd.DataFrame) -> dict[tuple[str, int], dict[str, object]]:
@@ -211,17 +245,41 @@ def group_allocations_by_state(all_stock_positions: list[dict]) -> list[dict]:
     return sorted(grouped.values(), key=lambda item: item["total_weight"], reverse=True)
 
 
+def append_cash_allocation(
+    grouped_allocations: list[dict],
+    cash_weight: float,
+) -> list[dict]:
+    if cash_weight < 0.0:
+        raise ValueError(f"cash_weight must be non-negative, received {cash_weight}.")
+    if cash_weight == 0.0:
+        return list(grouped_allocations)
+
+    return [
+        *grouped_allocations,
+        {
+            "mu": "Cash",
+            "epsilon_variance": "Cash",
+            "alpha": "Cash",
+            "total_weight": float(cash_weight),
+            "stock_count": 0,
+        },
+    ]
+
+
 def summarize_grouped_allocations(
     grouped_allocations: list[dict],
     top_n: int = 10,
 ) -> list[dict]:
     if top_n <= 0:
         raise ValueError("top_n must be positive.")
-    if len(grouped_allocations) <= top_n:
-        return grouped_allocations
 
-    head = grouped_allocations[:top_n]
-    tail = grouped_allocations[top_n:]
+    cash_allocations = [item for item in grouped_allocations if str(item["mu"]) == "Cash"]
+    non_cash_allocations = [item for item in grouped_allocations if str(item["mu"]) != "Cash"]
+    if len(non_cash_allocations) <= top_n:
+        return non_cash_allocations + cash_allocations
+
+    head = non_cash_allocations[:top_n]
+    tail = non_cash_allocations[top_n:]
     others = {
         "mu": "Others",
         "epsilon_variance": "Others",
@@ -229,7 +287,7 @@ def summarize_grouped_allocations(
         "total_weight": float(sum(float(item["total_weight"]) for item in tail)),
         "stock_count": int(sum(int(item["stock_count"]) for item in tail)),
     }
-    return head + [others]
+    return head + [others] + cash_allocations
 
 
 def render_allocation_pie_chart(
@@ -305,6 +363,8 @@ def export_allocation_artifacts(
     metadata: dict[str, object],
     stock_ids: list[str],
     stock_weights: torch.Tensor,
+    cash_weight: float,
+    portfolio_return: float,
     paths: PathsConfig,
     source_csv_path: Path,
     allocation_group_top_n: int,
@@ -317,14 +377,20 @@ def export_allocation_artifacts(
             stock_weights=stock_weights,
         ),
     )
-    grouped_allocations = group_allocations_by_state(all_stock_positions)
+    grouped_allocations = append_cash_allocation(
+        group_allocations_by_state(all_stock_positions),
+        cash_weight,
+    )
     grouped_allocations_top_n = summarize_grouped_allocations(
         grouped_allocations,
         top_n=allocation_group_top_n,
     )
 
     state_id = state_id_from_csv_path(source_csv_path)
-    chart_title = f"Top {allocation_group_top_n} Allocation Groups + Others: {state_id}"
+    chart_title = (
+        f"Top {allocation_group_top_n} Allocation Groups + Others + Cash: {state_id}\n"
+        f"portfolio_return={portfolio_return:.6f}"
+    )
     pie_chart_path = paths.outputs_dir / f"{state_id}_allocation_pie.png"
     bar_chart_path = paths.outputs_dir / f"{state_id}_allocation_bar.png"
     all_stock_weights_csv_path = paths.predictions_dir / f"{state_id}_all_stock_weights.csv"
@@ -413,6 +479,8 @@ def run_diagnostic_evaluation(
         metadata=metadata,
         stock_ids=dataset.selected_stock_ids,
         stock_weights=stock_weights,
+        cash_weight=cash_weight,
+        portfolio_return=portfolio_return,
         paths=paths,
         source_csv_path=source_csv_path,
         allocation_group_top_n=resolved_diagnostic_config.allocation_group_top_n,
@@ -498,7 +566,7 @@ def main() -> None:
             device_name=args.device,
             top_k=args.top_k,
         )
-    print(_build_terminal_summary(payload))
+    print(_format_terminal_summary(payload))
 
 
 if __name__ == "__main__":

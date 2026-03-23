@@ -15,7 +15,7 @@ def repo_root() -> Path:
 
 
 def default_data_path() -> Path:
-    return repo_root() / "toy_ff_generator" / "outputs" / "bull_4860_81_panel_long.csv"
+    return repo_root() / "toy_ff_generator" / "outputs" / "neutral_4860_200_panel_long.csv"
 
 
 @dataclass
@@ -68,7 +68,7 @@ class DataConfig:
     backtest_split_ratio: float = 0.15
 
     # 分析 horizon 天數，用來定義每筆樣本的未來報酬觀察區間。
-    analysis_horizon_days: int = 10
+    analysis_horizon_days: int = 20
 
     # 使用的股票總數上限或目標數量。
     num_stocks: int = 4860
@@ -127,19 +127,19 @@ class TrainConfig:
     batch_size: int = 1
 
     # 最大訓練 epoch 數量。
-    num_epochs: int = 200
+    num_epochs: int = 300
 
     # 每隔多少個 epoch 印出一次訓練紀錄。
     epoch_print_interval: int = 25
 
     # 權重衰減係數，用於 regularization。
-    weight_decay: float = 1e-4
+    weight_decay: float = 1e-5
 
     # gradient clipping 的最大 norm，避免梯度爆炸。
     grad_clip_norm: float = 1.0
 
     # early stopping 容忍幾個 epoch 沒進步後停止訓練。
-    early_stopping_patience: int = 30
+    early_stopping_patience: int = 300
 
     # diagnostic 模式中每次分析使用的步數或樣本步長設定。
     diagnostic_steps: int = 1
