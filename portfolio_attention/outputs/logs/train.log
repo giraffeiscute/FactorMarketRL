@@ -18,3 +18,35 @@ diagnostic_step=0 loss=-0.01420559 portfolio_return=0.01420559
 Loaded feature columns successfully: stock=['characteristic_1', 'characteristic_2', 'characteristic_3', 'price'] market=['MKT', 'SMB', 'HML']
 Running diagnostic mode because the fixed T=81 sample definition yields 0 legal train windows and 0 legal test windows.
 diagnostic_step=0 loss=-0.01420559 portfolio_return=0.01420559
+Loaded feature columns successfully: stock=['characteristic_1', 'characteristic_2', 'characteristic_3', 'price'] market=['MKT', 'SMB', 'HML']
+Running epoch-based train mode with train_windows=1 val_windows=1 batch_size=16 num_epochs=30.
+epoch=1 train_loss=-0.02261161 train_portfolio_return=0.02261161 val_loss=0.00009028 val_portfolio_return=-0.00009028
+epoch=2 train_loss=-0.02418225 train_portfolio_return=0.02418225 val_loss=-0.00127343 val_portfolio_return=0.00127343
+epoch=3 train_loss=-0.02571873 train_portfolio_return=0.02571873 val_loss=-0.00263113 val_portfolio_return=0.00263113
+epoch=4 train_loss=-0.02726980 train_portfolio_return=0.02726980 val_loss=-0.00397998 val_portfolio_return=0.00397998
+epoch=5 train_loss=-0.02881023 train_portfolio_return=0.02881023 val_loss=-0.00531726 val_portfolio_return=0.00531726
+epoch=6 train_loss=-0.03033518 train_portfolio_return=0.03033518 val_loss=-0.00664047 val_portfolio_return=0.00664047
+epoch=7 train_loss=-0.03184023 train_portfolio_return=0.03184023 val_loss=-0.00794723 val_portfolio_return=0.00794723
+epoch=8 train_loss=-0.03332260 train_portfolio_return=0.03332260 val_loss=-0.00923535 val_portfolio_return=0.00923535
+epoch=9 train_loss=-0.03479869 train_portfolio_return=0.03479869 val_loss=-0.01050289 val_portfolio_return=0.01050289
+epoch=10 train_loss=-0.03627430 train_portfolio_return=0.03627430 val_loss=-0.01174799 val_portfolio_return=0.01174799
+epoch=11 train_loss=-0.03771579 train_portfolio_return=0.03771579 val_loss=-0.01296894 val_portfolio_return=0.01296894
+epoch=12 train_loss=-0.03911152 train_portfolio_return=0.03911152 val_loss=-0.01416414 val_portfolio_return=0.01416414
+epoch=13 train_loss=-0.04051539 train_portfolio_return=0.04051539 val_loss=-0.01533243 val_portfolio_return=0.01533243
+epoch=14 train_loss=-0.04187309 train_portfolio_return=0.04187309 val_loss=-0.01647265 val_portfolio_return=0.01647265
+epoch=15 train_loss=-0.04321049 train_portfolio_return=0.04321049 val_loss=-0.01758371 val_portfolio_return=0.01758371
+epoch=16 train_loss=-0.04450364 train_portfolio_return=0.04450364 val_loss=-0.01866487 val_portfolio_return=0.01866487
+epoch=17 train_loss=-0.04577298 train_portfolio_return=0.04577298 val_loss=-0.01971548 val_portfolio_return=0.01971548
+epoch=18 train_loss=-0.04699206 train_portfolio_return=0.04699206 val_loss=-0.02073485 val_portfolio_return=0.02073485
+epoch=19 train_loss=-0.04819244 train_portfolio_return=0.04819244 val_loss=-0.02172269 val_portfolio_return=0.02172269
+epoch=20 train_loss=-0.04936720 train_portfolio_return=0.04936720 val_loss=-0.02267873 val_portfolio_return=0.02267873
+epoch=21 train_loss=-0.05048368 train_portfolio_return=0.05048368 val_loss=-0.02360283 val_portfolio_return=0.02360283
+epoch=22 train_loss=-0.05162670 train_portfolio_return=0.05162670 val_loss=-0.02449509 val_portfolio_return=0.02449509
+epoch=23 train_loss=-0.05266652 train_portfolio_return=0.05266652 val_loss=-0.02535554 val_portfolio_return=0.02535554
+epoch=24 train_loss=-0.05370912 train_portfolio_return=0.05370912 val_loss=-0.02618444 val_portfolio_return=0.02618444
+epoch=25 train_loss=-0.05471418 train_portfolio_return=0.05471418 val_loss=-0.02698233 val_portfolio_return=0.02698233
+epoch=26 train_loss=-0.05566934 train_portfolio_return=0.05566934 val_loss=-0.02774995 val_portfolio_return=0.02774995
+epoch=27 train_loss=-0.05663594 train_portfolio_return=0.05663594 val_loss=-0.02848813 val_portfolio_return=0.02848813
+epoch=28 train_loss=-0.05754588 train_portfolio_return=0.05754588 val_loss=-0.02919795 val_portfolio_return=0.02919795
+epoch=29 train_loss=-0.05839938 train_portfolio_return=0.05839938 val_loss=-0.02988043 val_portfolio_return=0.02988043
+epoch=30 train_loss=-0.05923061 train_portfolio_return=0.05923061 val_loss=-0.03053662 val_portfolio_return=0.03053662

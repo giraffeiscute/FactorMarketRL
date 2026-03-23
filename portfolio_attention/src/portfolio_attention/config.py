@@ -98,3 +98,5 @@ class TrainConfig:
     mode: str = "train"
     device: str = "auto"
     checkpoint_name: str = "diagnostic_last.pt"
+    train_best_checkpoint_name: str = "train_best.pt"
+    train_last_checkpoint_name: str = "train_last.pt"

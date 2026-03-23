@@ -9,7 +9,12 @@ import torch
 
 from portfolio_attention.config import DataConfig, ModelConfig, PathsConfig, TrainConfig
 from portfolio_attention.evaluate import enrich_top_k_positions, run_diagnostic_evaluation
-from portfolio_attention.train import run_diagnostic_training, run_training
+from portfolio_attention.train import (
+    build_arg_parser,
+    resolve_runtime_configs_from_args,
+    run_diagnostic_training,
+    run_training,
+)
 
 
 def write_panel_csv(path: Path, num_stocks: int = 8, num_times: int = 81, include_aux: bool = True) -> Path:
@@ -49,7 +54,7 @@ def test_cpu_only_smoke_train_and_evaluate(tmp_path: Path) -> None:
 
     assert metrics["diagnostic_only"] is True
     assert evaluation["diagnostic_only"] is True
-    assert (paths.checkpoints_dir / "diagnostic_last.pt").exists()
+    assert (paths.checkpoints_dir / train_config.checkpoint_name).exists()
     assert (paths.metrics_dir / "diagnostic_metrics.json").exists()
     prediction_json = paths.predictions_dir / "diagnostic_predictions.json"
     metrics_json = paths.metrics_dir / "evaluation_metrics.json"
@@ -98,7 +103,11 @@ def test_cpu_only_smoke_train_and_evaluate(tmp_path: Path) -> None:
     all_stock_weights_csv = pd.read_csv(metrics_exported["all_stock_weights_csv"])
     assert len(all_stock_weights_csv) == 8
     assert all_stock_weights_csv.loc[0, "weight"] >= all_stock_weights_csv.loc[len(all_stock_weights_csv) - 1, "weight"]
-    diagnostic_checkpoint = torch.load(paths.checkpoints_dir / "diagnostic_last.pt", map_location="cpu", weights_only=False)
+    diagnostic_checkpoint = torch.load(
+        paths.checkpoints_dir / train_config.checkpoint_name,
+        map_location="cpu",
+        weights_only=False,
+    )
     assert "num_stocks" not in diagnostic_checkpoint["model_config"]
 
 
@@ -127,16 +136,70 @@ def test_epoch_train_mode_saves_best_and_last_checkpoints(tmp_path: Path) -> Non
     assert metrics["epochs_completed"] <= 4
     assert metrics["best_epoch"] <= metrics["epochs_completed"]
     assert len(metrics["history"]) == metrics["epochs_completed"]
-    assert (paths.checkpoints_dir / "train_best.pt").exists()
-    assert (paths.checkpoints_dir / "train_last.pt").exists()
+    assert (paths.checkpoints_dir / train_config.train_best_checkpoint_name).exists()
+    assert (paths.checkpoints_dir / train_config.train_last_checkpoint_name).exists()
     assert (paths.metrics_dir / "train_metrics.json").exists()
 
-    best_checkpoint = torch.load(paths.checkpoints_dir / "train_best.pt", map_location="cpu", weights_only=False)
+    best_checkpoint = torch.load(
+        paths.checkpoints_dir / train_config.train_best_checkpoint_name,
+        map_location="cpu",
+        weights_only=False,
+    )
     assert "num_stocks" not in best_checkpoint["model_config"]
     assert best_checkpoint["train_config"]["batch_size"] == 16
     assert best_checkpoint["train_config"]["weight_decay"] == pytest.approx(1e-4)
     assert best_checkpoint["train_config"]["grad_clip_norm"] == pytest.approx(1.0)
     assert best_checkpoint["train_config"]["early_stopping_patience"] == 2
+
+
+def test_cli_defaults_resolve_from_config_objects() -> None:
+    args = build_arg_parser().parse_args([])
+    data_config, train_config = resolve_runtime_configs_from_args(args)
+
+    assert data_config == DataConfig()
+    assert train_config == TrainConfig()
+
+
+def test_cli_explicit_overrides_replace_config_values() -> None:
+    args = build_arg_parser().parse_args(
+        [
+            "--mode",
+            "diagnostic",
+            "--seed",
+            "7",
+            "--device",
+            "cpu",
+            "--loss",
+            "sharpe",
+            "--diagnostic-steps",
+            "3",
+            "--num-stocks",
+            "12",
+            "--batch-size",
+            "8",
+            "--num-epochs",
+            "9",
+            "--weight-decay",
+            "0.123",
+            "--grad-clip-norm",
+            "2.5",
+            "--early-stopping-patience",
+            "4",
+        ]
+    )
+    data_config, train_config = resolve_runtime_configs_from_args(args)
+
+    assert data_config.num_stocks == 12
+    assert train_config.mode == "diagnostic"
+    assert train_config.seed == 7
+    assert train_config.device == "cpu"
+    assert train_config.loss_name == "sharpe"
+    assert train_config.diagnostic_steps == 3
+    assert train_config.batch_size == 8
+    assert train_config.num_epochs == 9
+    assert train_config.weight_decay == pytest.approx(0.123)
+    assert train_config.grad_clip_norm == pytest.approx(2.5)
+    assert train_config.early_stopping_patience == 4
 
 
 def test_export_rows_require_aux_columns(tmp_path: Path) -> None:

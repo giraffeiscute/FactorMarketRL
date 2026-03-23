@@ -15,7 +15,7 @@ import torch
 
 if __package__ is None or __package__ == "":
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-    from portfolio_attention.config import DataConfig, ModelConfig, PathsConfig
+    from portfolio_attention.config import DataConfig, ModelConfig, PathsConfig, TrainConfig
     from portfolio_attention.dataset import PortfolioPanelDataset
     from portfolio_attention.losses import sharpe_loss
     from portfolio_attention.model import PortfolioAttentionModel
@@ -26,7 +26,7 @@ if __package__ is None or __package__ == "":
         state_id_from_csv_path,
     )
 else:
-    from .config import DataConfig, ModelConfig, PathsConfig
+    from .config import DataConfig, ModelConfig, PathsConfig, TrainConfig
     from .dataset import PortfolioPanelDataset
     from .losses import sharpe_loss
     from .model import PortfolioAttentionModel
@@ -272,7 +272,7 @@ def run_diagnostic_evaluation(
     dataset = PortfolioPanelDataset(data_config)
     batch = dataset.get_analysis_batch(device=device)
 
-    resolved_checkpoint = checkpoint_path or (paths.checkpoints_dir / "diagnostic_last.pt")
+    resolved_checkpoint = checkpoint_path or (paths.checkpoints_dir / TrainConfig().checkpoint_name)
     checkpoint = torch.load(resolved_checkpoint, map_location=device, weights_only=False)
     _validate_checkpoint_metadata(checkpoint, dataset)
     model_config = ModelConfig(**checkpoint["model_config"])

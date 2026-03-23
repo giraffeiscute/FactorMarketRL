@@ -31,11 +31,6 @@ else:
     from .model import PortfolioAttentionModel
     from .utils import append_log, ensure_output_dirs, resolve_device, save_json, set_seed
 
-
-TRAIN_BEST_CHECKPOINT_NAME = "train_best.pt"
-TRAIN_LAST_CHECKPOINT_NAME = "train_last.pt"
-
-
 def _serialize_config(config: object) -> dict:
     serialized = asdict(config)  # type: ignore[arg-type]
     for key, value in list(serialized.items()):
@@ -283,8 +278,8 @@ def run_epoch_training(
     epochs_without_improvement = 0
     epochs_completed = 0
     history: list[dict[str, float | int]] = []
-    best_checkpoint_path = paths.checkpoints_dir / TRAIN_BEST_CHECKPOINT_NAME
-    last_checkpoint_path = paths.checkpoints_dir / TRAIN_LAST_CHECKPOINT_NAME
+    best_checkpoint_path = paths.checkpoints_dir / train_config.train_best_checkpoint_name
+    last_checkpoint_path = paths.checkpoints_dir / train_config.train_last_checkpoint_name
 
     for epoch in range(1, train_config.num_epochs + 1):
         model.train()
@@ -425,45 +420,74 @@ def run_training(
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run training for portfolio_attention.")
-    parser.add_argument("--mode", default="diagnostic", choices=["diagnostic", "train"])
-    parser.add_argument("--data-path", type=Path, default=None)
-    parser.add_argument("--device", default="auto")
-    parser.add_argument("--loss", default="return", choices=["return", "sharpe"])
-    parser.add_argument("--diagnostic-steps", type=int, default=1)
-    parser.add_argument("--seed", type=int, default=7)
-    parser.add_argument("--num-stocks", type=int, default=None)
-    parser.add_argument("--batch-size", type=int, default=TrainConfig.batch_size)
-    parser.add_argument("--num-epochs", type=int, default=TrainConfig.num_epochs)
-    parser.add_argument("--weight-decay", type=float, default=TrainConfig.weight_decay)
-    parser.add_argument("--grad-clip-norm", type=float, default=TrainConfig.grad_clip_norm)
+    parser.add_argument("--mode", default=argparse.SUPPRESS, choices=["diagnostic", "train"])
+    parser.add_argument("--data-path", type=Path, default=argparse.SUPPRESS)
+    parser.add_argument("--device", default=argparse.SUPPRESS)
+    parser.add_argument("--loss", default=argparse.SUPPRESS, choices=["return", "sharpe"])
+    parser.add_argument("--diagnostic-steps", type=int, default=argparse.SUPPRESS)
+    parser.add_argument("--seed", type=int, default=argparse.SUPPRESS)
+    parser.add_argument("--num-stocks", type=int, default=argparse.SUPPRESS)
+    parser.add_argument("--batch-size", type=int, default=argparse.SUPPRESS)
+    parser.add_argument("--num-epochs", type=int, default=argparse.SUPPRESS)
+    parser.add_argument("--weight-decay", type=float, default=argparse.SUPPRESS)
+    parser.add_argument("--grad-clip-norm", type=float, default=argparse.SUPPRESS)
     parser.add_argument(
         "--early-stopping-patience",
         type=int,
-        default=TrainConfig.early_stopping_patience,
+        default=argparse.SUPPRESS,
     )
     return parser
+
+
+def resolve_runtime_configs_from_args(
+    args: argparse.Namespace,
+    *,
+    data_config: DataConfig | None = None,
+    train_config: TrainConfig | None = None,
+) -> tuple[DataConfig, TrainConfig]:
+    resolved_data_config = data_config or DataConfig()
+    resolved_train_config = train_config or TrainConfig()
+    args_dict = vars(args)
+
+    data_overrides = {}
+    if "data_path" in args_dict:
+        data_overrides["csv_path"] = args_dict["data_path"]
+    if "num_stocks" in args_dict:
+        data_overrides["num_stocks"] = args_dict["num_stocks"]
+    if data_overrides:
+        resolved_data_config = replace(resolved_data_config, **data_overrides)
+
+    train_overrides = {}
+    if "mode" in args_dict:
+        train_overrides["mode"] = args_dict["mode"]
+    if "device" in args_dict:
+        train_overrides["device"] = args_dict["device"]
+    if "diagnostic_steps" in args_dict:
+        train_overrides["diagnostic_steps"] = args_dict["diagnostic_steps"]
+    if "seed" in args_dict:
+        train_overrides["seed"] = args_dict["seed"]
+    if "loss" in args_dict:
+        train_overrides["loss_name"] = args_dict["loss"]
+    if "batch_size" in args_dict:
+        train_overrides["batch_size"] = args_dict["batch_size"]
+    if "num_epochs" in args_dict:
+        train_overrides["num_epochs"] = args_dict["num_epochs"]
+    if "weight_decay" in args_dict:
+        train_overrides["weight_decay"] = args_dict["weight_decay"]
+    if "grad_clip_norm" in args_dict:
+        train_overrides["grad_clip_norm"] = args_dict["grad_clip_norm"]
+    if "early_stopping_patience" in args_dict:
+        train_overrides["early_stopping_patience"] = args_dict["early_stopping_patience"]
+    if train_overrides:
+        resolved_train_config = replace(resolved_train_config, **train_overrides)
+
+    return resolved_data_config, resolved_train_config
 
 
 def main() -> None:
     args = build_arg_parser().parse_args()
     paths = PathsConfig()
-    default_data_config = DataConfig()
-    data_config = DataConfig(
-        csv_path=args.data_path or default_data_config.csv_path,
-        num_stocks=args.num_stocks,
-    )
-    train_config = TrainConfig(
-        mode=args.mode,
-        device=args.device,
-        diagnostic_steps=args.diagnostic_steps,
-        seed=args.seed,
-        loss_name=args.loss,
-        batch_size=args.batch_size,
-        num_epochs=args.num_epochs,
-        weight_decay=args.weight_decay,
-        grad_clip_norm=args.grad_clip_norm,
-        early_stopping_patience=args.early_stopping_patience,
-    )
+    data_config, train_config = resolve_runtime_configs_from_args(args)
     metrics = run_training(data_config, ModelConfig(), train_config, paths)
     print(metrics)
 
