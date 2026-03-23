@@ -518,10 +518,17 @@ def run_diagnostic_evaluation(
         "allocation_pie_chart": allocation_payload["allocation_pie_chart"],
         "allocation_bar_chart": allocation_payload["allocation_bar_chart"],
     }
+    state_id = state_id_from_csv_path(data_config.csv_path)
     legacy_csv_path = paths.predictions_dir / "diagnostic_predictions.csv"
     if legacy_csv_path.exists():
         legacy_csv_path.unlink()
-    save_json(prediction_payload, paths.predictions_dir / "diagnostic_predictions.json")
+    legacy_json_path = paths.predictions_dir / "diagnostic_predictions.json"
+    if legacy_json_path.exists():
+        legacy_json_path.unlink()
+    save_json(
+        prediction_payload,
+        paths.predictions_dir / f"{state_id}_diagnostic_predictions.json",
+    )
     save_json(metrics_payload, paths.metrics_dir / "evaluation_metrics.json")
     return prediction_payload
 

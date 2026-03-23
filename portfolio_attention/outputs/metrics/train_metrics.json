@@ -1,227 +1,111 @@
 {
-  "batch_size": 16,
-  "best_checkpoint_path": "C:\\Users\\Yuan\\Desktop\\YUAN\\\u5be6\u7fd2\\\u5317\u4eac\u91cf\u5316\u5be6\u7fd2\\FactorMarketRL\\portfolio_attention\\outputs\\checkpoints\\train_best.pt",
-  "best_epoch": 30,
-  "best_val_loss": -0.030536619946360588,
-  "device": "cpu",
+  "backtest_window_count": 1,
+  "batch_size": 1,
+  "best_checkpoint_path": "/root/FactorMarketRL/portfolio_attention/outputs/checkpoints/train_best.pt",
+  "best_epoch": 59,
+  "best_val_loss": -0.32443687319755554,
+  "device": "cuda",
   "diagnostic_only": false,
-  "early_stopping_patience": 5,
-  "epochs_completed": 30,
-  "history": [
-    {
-      "epoch": 1,
-      "train_loss": -0.02261161245405674,
-      "train_portfolio_return": 0.02261161245405674,
-      "val_loss": 9.028389467857778e-05,
-      "val_portfolio_return": -9.028389467857778e-05
+  "early_stopping_patience": 100,
+  "epochs_completed": 159,
+  "final_backtest": {
+    "average_cash_weight": 1.5505921546754564e-10,
+    "average_portfolio_return": -0.09546992927789688,
+    "cash_weight": 1.5505921546754564e-10,
+    "device": "cuda",
+    "diagnostic_only": false,
+    "evaluation_split": "backtest",
+    "metadata": {
+      "analysis_horizon_days": 19,
+      "backtest_days": 20,
+      "backtest_horizon_end_index": 199,
+      "backtest_horizon_start_index": 181,
+      "backtest_split_end_index": 199,
+      "backtest_split_length": 20,
+      "backtest_split_ratio": 0.1,
+      "backtest_split_start_index": 180,
+      "backtest_window_count": 1,
+      "csv_unique_stocks": 4860,
+      "csv_unique_times": 200,
+      "dynamic_backtest_lookback_length": 181,
+      "dynamic_train_lookback_length": 141,
+      "dynamic_validation_lookback_length": 161,
+      "effective_time_steps": 200,
+      "model_lookback": 181,
+      "parsed_n": 4860,
+      "parsed_t": 200,
+      "selected_num_stocks": 4860,
+      "total_num_days": 200,
+      "train_days": 160,
+      "train_horizon_end_index": 159,
+      "train_horizon_start_index": 141,
+      "train_split_end_index": 159,
+      "train_split_length": 160,
+      "train_split_ratio": 0.8,
+      "train_split_start_index": 0,
+      "train_window_count": 1,
+      "validation_days": 20,
+      "validation_horizon_end_index": 179,
+      "validation_horizon_start_index": 161,
+      "validation_split_end_index": 179,
+      "validation_split_length": 20,
+      "validation_split_ratio": 0.1,
+      "validation_split_start_index": 160,
+      "validation_window_count": 1
     },
-    {
-      "epoch": 2,
-      "train_loss": -0.02418225258588791,
-      "train_portfolio_return": 0.02418225258588791,
-      "val_loss": -0.001273433561436832,
-      "val_portfolio_return": 0.001273433561436832
-    },
-    {
-      "epoch": 3,
-      "train_loss": -0.025718728080391884,
-      "train_portfolio_return": 0.025718728080391884,
-      "val_loss": -0.002631127368658781,
-      "val_portfolio_return": 0.002631127368658781
-    },
-    {
-      "epoch": 4,
-      "train_loss": -0.02726980298757553,
-      "train_portfolio_return": 0.02726980298757553,
-      "val_loss": -0.003979980479925871,
-      "val_portfolio_return": 0.003979980479925871
-    },
-    {
-      "epoch": 5,
-      "train_loss": -0.028810231015086174,
-      "train_portfolio_return": 0.028810231015086174,
-      "val_loss": -0.0053172642365098,
-      "val_portfolio_return": 0.0053172642365098
-    },
-    {
-      "epoch": 6,
-      "train_loss": -0.03033517673611641,
-      "train_portfolio_return": 0.03033517673611641,
-      "val_loss": -0.0066404701210558414,
-      "val_portfolio_return": 0.0066404701210558414
-    },
-    {
-      "epoch": 7,
-      "train_loss": -0.03184022754430771,
-      "train_portfolio_return": 0.03184022754430771,
-      "val_loss": -0.007947229780256748,
-      "val_portfolio_return": 0.007947229780256748
-    },
-    {
-      "epoch": 8,
-      "train_loss": -0.03332260251045227,
-      "train_portfolio_return": 0.03332260251045227,
-      "val_loss": -0.009235350415110588,
-      "val_portfolio_return": 0.009235350415110588
-    },
-    {
-      "epoch": 9,
-      "train_loss": -0.03479869291186333,
-      "train_portfolio_return": 0.03479869291186333,
-      "val_loss": -0.010502890683710575,
-      "val_portfolio_return": 0.010502890683710575
-    },
-    {
-      "epoch": 10,
-      "train_loss": -0.036274295300245285,
-      "train_portfolio_return": 0.036274295300245285,
-      "val_loss": -0.011747986078262329,
-      "val_portfolio_return": 0.011747986078262329
-    },
-    {
-      "epoch": 11,
-      "train_loss": -0.037715792655944824,
-      "train_portfolio_return": 0.037715792655944824,
-      "val_loss": -0.012968940660357475,
-      "val_portfolio_return": 0.012968940660357475
-    },
-    {
-      "epoch": 12,
-      "train_loss": -0.03911151736974716,
-      "train_portfolio_return": 0.03911151736974716,
-      "val_loss": -0.014164138585329056,
-      "val_portfolio_return": 0.014164138585329056
-    },
-    {
-      "epoch": 13,
-      "train_loss": -0.04051538556814194,
-      "train_portfolio_return": 0.04051538556814194,
-      "val_loss": -0.015332430601119995,
-      "val_portfolio_return": 0.015332430601119995
-    },
-    {
-      "epoch": 14,
-      "train_loss": -0.04187308996915817,
-      "train_portfolio_return": 0.04187308996915817,
-      "val_loss": -0.016472652554512024,
-      "val_portfolio_return": 0.016472652554512024
-    },
-    {
-      "epoch": 15,
-      "train_loss": -0.04321049153804779,
-      "train_portfolio_return": 0.04321049153804779,
-      "val_loss": -0.017583707347512245,
-      "val_portfolio_return": 0.017583707347512245
-    },
-    {
-      "epoch": 16,
-      "train_loss": -0.04450364410877228,
-      "train_portfolio_return": 0.04450364410877228,
-      "val_loss": -0.01866486668586731,
-      "val_portfolio_return": 0.01866486668586731
-    },
-    {
-      "epoch": 17,
-      "train_loss": -0.0457729808986187,
-      "train_portfolio_return": 0.0457729808986187,
-      "val_loss": -0.019715482369065285,
-      "val_portfolio_return": 0.019715482369065285
-    },
-    {
-      "epoch": 18,
-      "train_loss": -0.04699206352233887,
-      "train_portfolio_return": 0.04699206352233887,
-      "val_loss": -0.02073485031723976,
-      "val_portfolio_return": 0.02073485031723976
-    },
-    {
-      "epoch": 19,
-      "train_loss": -0.04819244146347046,
-      "train_portfolio_return": 0.04819244146347046,
-      "val_loss": -0.021722692996263504,
-      "val_portfolio_return": 0.021722692996263504
-    },
-    {
-      "epoch": 20,
-      "train_loss": -0.04936720058321953,
-      "train_portfolio_return": 0.04936720058321953,
-      "val_loss": -0.02267872542142868,
-      "val_portfolio_return": 0.02267872542142868
-    },
-    {
-      "epoch": 21,
-      "train_loss": -0.05048368126153946,
-      "train_portfolio_return": 0.05048368126153946,
-      "val_loss": -0.023602833971381187,
-      "val_portfolio_return": 0.023602833971381187
-    },
-    {
-      "epoch": 22,
-      "train_loss": -0.05162670463323593,
-      "train_portfolio_return": 0.05162670463323593,
-      "val_loss": -0.024495093151926994,
-      "val_portfolio_return": 0.024495093151926994
-    },
-    {
-      "epoch": 23,
-      "train_loss": -0.052666518837213516,
-      "train_portfolio_return": 0.052666518837213516,
-      "val_loss": -0.025355538353323936,
-      "val_portfolio_return": 0.025355538353323936
-    },
-    {
-      "epoch": 24,
-      "train_loss": -0.05370911583304405,
-      "train_portfolio_return": 0.05370911583304405,
-      "val_loss": -0.026184435933828354,
-      "val_portfolio_return": 0.026184435933828354
-    },
-    {
-      "epoch": 25,
-      "train_loss": -0.05471418425440788,
-      "train_portfolio_return": 0.05471418425440788,
-      "val_loss": -0.026982327923178673,
-      "val_portfolio_return": 0.026982327923178673
-    },
-    {
-      "epoch": 26,
-      "train_loss": -0.05566934496164322,
-      "train_portfolio_return": 0.05566934496164322,
-      "val_loss": -0.02774995192885399,
-      "val_portfolio_return": 0.02774995192885399
-    },
-    {
-      "epoch": 27,
-      "train_loss": -0.056635938584804535,
-      "train_portfolio_return": 0.056635938584804535,
-      "val_loss": -0.028488129377365112,
-      "val_portfolio_return": 0.028488129377365112
-    },
-    {
-      "epoch": 28,
-      "train_loss": -0.05754587799310684,
-      "train_portfolio_return": 0.05754587799310684,
-      "val_loss": -0.029197953641414642,
-      "val_portfolio_return": 0.029197953641414642
-    },
-    {
-      "epoch": 29,
-      "train_loss": -0.05839937552809715,
-      "train_portfolio_return": 0.05839937552809715,
-      "val_loss": -0.029880426824092865,
-      "val_portfolio_return": 0.029880426824092865
-    },
-    {
-      "epoch": 30,
-      "train_loss": -0.059230607002973557,
-      "train_portfolio_return": 0.059230607002973557,
-      "val_loss": -0.030536619946360588,
-      "val_portfolio_return": 0.030536619946360588
+    "portfolio_return": -0.09546992927789688,
+    "source_path": "neutral_4860_200",
+    "top_k_stock_weights": [
+      {
+        "alpha": "0.020%",
+        "epsilon_variance": "2.000%",
+        "mu": "(0.5,0.5,-0.5)",
+        "rank": 1,
+        "stock_id": "stock_1578",
+        "weight": 0.3806103467941284
+      },
+      {
+        "alpha": "0.030%",
+        "epsilon_variance": "2.000%",
+        "mu": "(0.5,0.5,-0.5)",
+        "rank": 2,
+        "stock_id": "stock_4801",
+        "weight": 0.34732291102409363
+      },
+      {
+        "alpha": "-0.010%",
+        "epsilon_variance": "1.000%",
+        "mu": "(0.5,0.5,-0.5)",
+        "rank": 3,
+        "stock_id": "stock_2104",
+        "weight": 0.16186077892780304
+      },
+      {
+        "alpha": "0.020%",
+        "epsilon_variance": "2.000%",
+        "mu": "(0.5,0.5,-0.5)",
+        "rank": 4,
+        "stock_id": "stock_1570",
+        "weight": 0.08819273114204407
+      },
+      {
+        "alpha": "-0.010%",
+        "epsilon_variance": "2.000%",
+        "mu": "(0.5,0.5,-0.5)",
+        "rank": 5,
+        "stock_id": "stock_3196",
+        "weight": 0.01869365945458412
+      }
+    ],
+    "train_config": {
+      "batch_size": 1,
+      "early_stopping_patience": 100,
+      "grad_clip_norm": 1.0,
+      "num_epochs": 300,
+      "weight_decay": 1e-05
     }
-  ],
-  "last_checkpoint_path": "C:\\Users\\Yuan\\Desktop\\YUAN\\\u5be6\u7fd2\\\u5317\u4eac\u91cf\u5316\u5be6\u7fd2\\FactorMarketRL\\portfolio_attention\\outputs\\checkpoints\\train_last.pt",
-  "last_train_loss": -0.059230607002973557,
-  "last_val_loss": -0.030536619946360588,
+  },
+  "last_checkpoint_path": "/root/FactorMarketRL/portfolio_attention/outputs/checkpoints/train_last.pt",
   "loaded_feature_columns": {
     "market": [
       "MKT",
@@ -237,26 +121,47 @@
   },
   "loss_name": "return",
   "metadata": {
-    "analysis_entry_day": 61,
-    "analysis_exit_day": 80,
-    "analysis_only": true,
-    "available_analysis_windows": 1,
+    "analysis_horizon_days": 19,
+    "backtest_days": 20,
+    "backtest_horizon_end_index": 199,
+    "backtest_horizon_start_index": 181,
+    "backtest_split_end_index": 199,
+    "backtest_split_length": 20,
+    "backtest_split_ratio": 0.1,
+    "backtest_split_start_index": 180,
+    "backtest_window_count": 1,
     "csv_unique_stocks": 4860,
-    "csv_unique_times": 81,
-    "effective_time_steps": 81,
-    "legal_test_windows": 0,
-    "legal_train_windows": 0,
-    "lookback": 60,
+    "csv_unique_times": 200,
+    "dynamic_backtest_lookback_length": 181,
+    "dynamic_train_lookback_length": 141,
+    "dynamic_validation_lookback_length": 161,
+    "effective_time_steps": 200,
+    "model_lookback": 181,
     "parsed_n": 4860,
-    "parsed_t": 81,
+    "parsed_t": 200,
     "selected_num_stocks": 4860,
-    "source_path": "C:\\Users\\Yuan\\Desktop\\YUAN\\\u5be6\u7fd2\\\u5317\u4eac\u91cf\u5316\u5be6\u7fd2\\FactorMarketRL\\toy_ff_generator\\outputs\\bull_4860_81_panel_long.csv",
-    "test_days": 17,
-    "train_days": 64
+    "source_path": "/root/FactorMarketRL/toy_ff_generator/outputs/neutral_4860_200_panel_long.csv",
+    "total_num_days": 200,
+    "train_days": 160,
+    "train_horizon_end_index": 159,
+    "train_horizon_start_index": 141,
+    "train_split_end_index": 159,
+    "train_split_length": 160,
+    "train_split_ratio": 0.8,
+    "train_split_start_index": 0,
+    "train_window_count": 1,
+    "validation_days": 20,
+    "validation_horizon_end_index": 179,
+    "validation_horizon_start_index": 161,
+    "validation_split_end_index": 179,
+    "validation_split_length": 20,
+    "validation_split_ratio": 0.1,
+    "validation_split_start_index": 160,
+    "validation_window_count": 1
   },
   "mode": "train",
-  "num_epochs_requested": 30,
-  "stopped_early": false,
+  "num_epochs_requested": 300,
+  "stopped_early": true,
   "train_window_count": 1,
-  "val_window_count": 1
+  "validation_window_count": 1
 }

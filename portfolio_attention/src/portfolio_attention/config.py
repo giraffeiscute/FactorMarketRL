@@ -59,16 +59,16 @@ class DataConfig:
     csv_path: Path = field(default_factory=default_data_path)
 
     # train split 所佔比例，例如 0.70 表示 70% 資料用於訓練參數更新。
-    train_split_ratio: float = 0.70
+    train_split_ratio: float = 0.80
 
     # validation split 所佔比例，用來選 best epoch 與 early stopping。
-    validation_split_ratio: float = 0.15
+    validation_split_ratio: float = 0.1
 
     # backtest split 所佔比例，只在訓練完成後做一次最終回測。
-    backtest_split_ratio: float = 0.15
+    backtest_split_ratio: float = 0.1
 
     # 分析 horizon 天數，用來定義每筆樣本的未來報酬觀察區間。
-    analysis_horizon_days: int = 20
+    analysis_horizon_days: int = 19
 
     # 使用的股票總數上限或目標數量。
     num_stocks: int = 4860
@@ -106,7 +106,7 @@ class ModelConfig:
     attention_heads: int = 4
 
     # dropout 比例，用來降低 overfitting 風險。
-    dropout: float = 0.1
+    dropout: float = 0.0
 
     def as_dict(self) -> dict:
         """將模型設定轉成 dict，方便記錄或輸出。"""
@@ -121,7 +121,7 @@ class TrainConfig:
     seed: int = 42
 
     # optimizer 使用的學習率。
-    learning_rate: float = 2e-4
+    learning_rate: float = 5e-3
 
     # 每次訓練迭代使用的 batch 大小。
     batch_size: int = 1
@@ -130,7 +130,7 @@ class TrainConfig:
     num_epochs: int = 300
 
     # 每隔多少個 epoch 印出一次訓練紀錄。
-    epoch_print_interval: int = 25
+    epoch_print_interval: int = 20
 
     # 權重衰減係數，用於 regularization。
     weight_decay: float = 1e-5
@@ -139,7 +139,7 @@ class TrainConfig:
     grad_clip_norm: float = 1.0
 
     # early stopping 容忍幾個 epoch 沒進步後停止訓練。
-    early_stopping_patience: int = 300
+    early_stopping_patience: int = 100
 
     # diagnostic 模式中每次分析使用的步數或樣本步長設定。
     diagnostic_steps: int = 1
