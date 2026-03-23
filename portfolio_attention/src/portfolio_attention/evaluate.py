@@ -42,12 +42,12 @@ EXPORTED_TRAIN_CONFIG_KEYS = [
 ]
 
 
-def _parse_source_time_to_day(raw_value: object) -> int:
+def _parse_source_time_to_index(raw_value: object) -> int:
     if isinstance(raw_value, str):
         match = re.fullmatch(r"t_(\d+)", raw_value.strip())
         if not match:
             raise ValueError(f"Unsupported source time label: {raw_value}")
-        return int(match.group(1)) + 1
+        return int(match.group(1))
     return int(raw_value)
 
 
@@ -61,7 +61,7 @@ def _load_aux_frame(source_csv_path: Path) -> pd.DataFrame:
         )
 
     aux_frame = pd.read_csv(source_csv_path, usecols=REQUIRED_AUX_COLUMNS)
-    aux_frame["analysis_day"] = aux_frame["t"].map(_parse_source_time_to_day)
+    aux_frame["analysis_time_index"] = aux_frame["t"].map(_parse_source_time_to_index)
     return aux_frame
 
 
@@ -84,30 +84,53 @@ def _validate_checkpoint_metadata(checkpoint: dict, dataset: PortfolioPanelDatas
         )
 
 
+def _get_aux_lookup(aux_frame: pd.DataFrame) -> dict[tuple[str, int], dict[str, object]]:
+    cached_lookup = aux_frame.attrs.get("_position_lookup")
+    if cached_lookup is not None:
+        return cached_lookup
+
+    duplicated = aux_frame.duplicated(["stock_id", "analysis_time_index"], keep=False)
+    if duplicated.any():
+        duplicate_rows = (
+            aux_frame.loc[duplicated, ["stock_id", "analysis_time_index"]]
+            .head(5)
+            .to_dict("records")
+        )
+        raise ValueError(
+            "Diagnostic export found multiple source rows for the same "
+            "(stock_id, test_horizon_start_index) keys. "
+            f"Examples: {duplicate_rows}"
+        )
+
+    lookup: dict[tuple[str, int], dict[str, object]] = {}
+    for row in aux_frame.itertuples(index=False):
+        lookup[(str(row.stock_id), int(row.analysis_time_index))] = {
+            "mu": row.mu,
+            "alpha": row.alpha,
+            "epsilon_variance": row.epsilon_variance,
+        }
+
+    aux_frame.attrs["_position_lookup"] = lookup
+    return lookup
+
+
 def enrich_positions(
     *,
     aux_frame: pd.DataFrame,
     metadata: dict,
     positions: list[dict[str, object]],
 ) -> list[dict]:
+    analysis_time_index = int(metadata["test_horizon_start_index"])
+    aux_lookup = _get_aux_lookup(aux_frame)
     enriched: list[dict] = []
     for rank, position in enumerate(positions, start=1):
         stock_id = str(position["stock_id"])
-        matches = aux_frame[
-            (aux_frame["stock_id"] == stock_id)
-            & (aux_frame["analysis_day"] == metadata["analysis_entry_day"])
-        ]
-        if len(matches) == 0:
+        match = aux_lookup.get((stock_id, analysis_time_index))
+        if match is None:
             raise ValueError(
                 f"Diagnostic export could not find exactly one source row for stock_id={stock_id} "
-                f"at analysis_entry_day={metadata['analysis_entry_day']}."
+                f"at test_horizon_start_index={analysis_time_index}."
             )
-        if len(matches) > 1:
-            raise ValueError(
-                f"Diagnostic export found multiple source rows for stock_id={stock_id} "
-                f"at analysis_entry_day={metadata['analysis_entry_day']}."
-            )
-        match = matches.iloc[0]
         enriched.append(
             {
                 "rank": rank,

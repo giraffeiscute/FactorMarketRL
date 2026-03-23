@@ -51,22 +51,22 @@ class DataConfig:
 
     `num_stocks` is the single explicit stock-count input for the project.
     When omitted, the dataset's actual stock count is used.
+    Lookback is no longer a fixed global setting; it is derived per sample
+    from the split boundary and `analysis_horizon_days`.
     """
 
     csv_path: Path = field(default_factory=default_data_path)
-    lookback: int = 60
     train_ratio: float = 0.8
-    analysis_entry_day: int = 61
-    analysis_exit_day: int = 80
-    num_stocks: int | None = None
-
-    def resolved_entry_day(self) -> int:
-        return self.analysis_entry_day or (self.lookback + 1)
+    analysis_horizon_days: int = 10
+    num_stocks: int = 4860
 
 
 @dataclass
 class ModelConfig:
-    """Model architecture settings only. Stock count is passed explicitly."""
+    """Model architecture settings only. Stock count is passed explicitly.
+
+    `lookback` is resolved at runtime from the dataset's longest dynamic sample.
+    """
 
     stock_feature_dim: int = 4
     market_feature_dim: int = 3
@@ -88,8 +88,9 @@ class TrainConfig:
 
     seed: int = 42
     learning_rate: float = 2e-4
-    batch_size: int = 16
-    num_epochs: int = 30
+    batch_size: int = 1
+    num_epochs: int = 100
+    epoch_print_interval: int = 10
     weight_decay: float = 1e-4
     grad_clip_norm: float = 1.0
     early_stopping_patience: int = 5

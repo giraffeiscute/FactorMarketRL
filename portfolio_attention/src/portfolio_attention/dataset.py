@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 import re
-import warnings
 from pathlib import Path
 from typing import Any
 
@@ -90,20 +89,30 @@ class Standardizer:
 
 @dataclass
 class PanelMetadata:
-    """Dataset summary with honest sample accounting."""
+    """Dataset summary for the single fixed train/test sample rule."""
 
     source_path: str
     parsed_n: int
     parsed_t: int
     csv_unique_stocks: int
     csv_unique_times: int
+    total_num_days: int
     train_days: int
     test_days: int
-    lookback: int
-    analysis_entry_day: int
-    analysis_exit_day: int
+    train_split_length: int
+    test_split_length: int
+    analysis_horizon_days: int
+    train_horizon_start_index: int
+    train_horizon_end_index: int
+    test_horizon_start_index: int
+    test_horizon_end_index: int
+    dynamic_train_lookback_length: int
+    dynamic_test_lookback_length: int
+    model_lookback: int
     legal_train_windows: int
     legal_test_windows: int
+    train_window_count: int
+    test_window_count: int
     available_analysis_windows: int
     analysis_only: bool
     selected_num_stocks: int
@@ -113,19 +122,33 @@ class PanelMetadata:
         return asdict(self)
 
 
-class PortfolioWindowDataset(Dataset):
-    """Rolling-window dataset used by train.py for epoch-based training."""
+@dataclass(frozen=True)
+class WindowSpec:
+    """Defines one cross-sectional sample window inside the panel."""
 
-    def __init__(self, panel_dataset: "PortfolioPanelDataset", start_indices: list[int]) -> None:
+    split_name: str
+    start_index: int
+    lookback_length: int
+    horizon_start_index: int
+    horizon_end_index: int
+
+
+class PortfolioWindowDataset(Dataset):
+    """Single-window dataset used by train.py for epoch-based training."""
+
+    def __init__(
+        self,
+        panel_dataset: "PortfolioPanelDataset",
+        window_specs: list[WindowSpec],
+    ) -> None:
         self.panel_dataset = panel_dataset
-        self.start_indices = start_indices
+        self.window_specs = window_specs
 
     def __len__(self) -> int:
-        return len(self.start_indices)
+        return len(self.window_specs)
 
     def __getitem__(self, index: int) -> dict[str, torch.Tensor]:
-        start_index = self.start_indices[index]
-        window = self.panel_dataset.get_window(start_index)
+        window = self.panel_dataset.get_window(self.window_specs[index])
         return {
             key: torch.from_numpy(value)
             for key, value in window.items()
@@ -133,10 +156,11 @@ class PortfolioWindowDataset(Dataset):
 
 
 class PortfolioPanelDataset:
-    """Loads the long-format panel and builds a fixed-stock dataset.
+    """Loads the long-format panel and builds the fixed train/test samples.
 
-    Time position uses `x_t = w_t + p_t`.
-    Stock identity position is handled later in the model as `x_{s,t} = [z_{s,t}; e_s]`.
+    The project now uses one and only one train sample plus one and only one
+    test sample. Each sample keeps the full cross-sectional stock universe and
+    uses all history before its horizon start as lookback.
     """
 
     def __init__(self, config: DataConfig) -> None:
@@ -146,20 +170,107 @@ class PortfolioPanelDataset:
             raise FileNotFoundError(f"Dataset not found: {self.csv_path}")
 
         self.parsed_n, self.parsed_t = parse_panel_dimensions(self.csv_path.name)
-        self.lookback = config.lookback
+        self.model_lookback = 0
         self._load()
 
-    def _validate_num_stocks(self) -> None:
-        if self.config.num_stocks is None:
-            return
-        if self.config.num_stocks <= 0:
-            raise ValueError("DataConfig.num_stocks must be positive when provided.")
+    def _resolve_selected_stock_indices(self) -> np.ndarray:
         actual_num_stocks = len(self.stock_ids)
-        if self.config.num_stocks != actual_num_stocks:
+        requested_num_stocks = self.config.num_stocks
+        if requested_num_stocks is None:
+            return np.arange(actual_num_stocks, dtype=np.int64)
+        if requested_num_stocks <= 0:
+            raise ValueError("DataConfig.num_stocks must be positive when provided.")
+        if requested_num_stocks > actual_num_stocks:
             raise ValueError(
-                f"DataConfig.num_stocks={self.config.num_stocks} does not match the dataset stock count "
-                f"{actual_num_stocks} inferred from {self.csv_path.name}."
+                f"Requested fixed num_stocks={requested_num_stocks}, "
+                f"but dataset only provides {actual_num_stocks} stocks."
             )
+        return np.arange(requested_num_stocks, dtype=np.int64)
+
+    def _build_window_spec(
+        self,
+        *,
+        split_name: str,
+        horizon_start_index: int,
+        horizon_end_index: int,
+        lookback_length: int,
+    ) -> WindowSpec:
+        if lookback_length <= 0:
+            raise ValueError(
+                f"dynamic_{split_name}_lookback_length must be positive, received {lookback_length}."
+            )
+        return WindowSpec(
+            split_name=split_name,
+            start_index=0,
+            lookback_length=lookback_length,
+            horizon_start_index=horizon_start_index,
+            horizon_end_index=horizon_end_index,
+        )
+
+    def _initialize_single_sample_windows(self) -> None:
+        analysis_horizon_days = int(self.config.analysis_horizon_days)
+        if analysis_horizon_days <= 0:
+            raise ValueError("analysis_horizon_days must be positive.")
+
+        train_split_length = self.train_days
+        test_split_length = self.test_days
+        if train_split_length <= analysis_horizon_days:
+            raise ValueError(
+                f"train_split_length={train_split_length} must be greater than analysis_horizon_days="
+                f"{analysis_horizon_days} so the train split can contain the full horizon and leave a valid lookback."
+            )
+        if test_split_length <= analysis_horizon_days:
+            raise ValueError(
+                f"test_split_length={test_split_length} must be greater than analysis_horizon_days="
+                f"{analysis_horizon_days} so the test split can contain the full horizon and leave a valid lookback."
+            )
+
+        self.analysis_horizon_days = analysis_horizon_days
+        self.train_horizon_start_index = train_split_length - analysis_horizon_days
+        self.train_horizon_end_index = train_split_length - 1
+        self.test_horizon_start_index = self.parsed_t - analysis_horizon_days
+        self.test_horizon_end_index = self.parsed_t - 1
+        self.dynamic_train_lookback_length = self.train_horizon_start_index
+        self.dynamic_test_lookback_length = self.test_horizon_start_index
+
+        if self.dynamic_train_lookback_length <= 0:
+            raise ValueError(
+                "dynamic_train_lookback_length must be positive under the fixed single-sample rule. "
+                f"Received {self.dynamic_train_lookback_length}."
+            )
+        if self.dynamic_test_lookback_length <= 0:
+            raise ValueError(
+                "dynamic_test_lookback_length must be positive under the fixed single-sample rule. "
+                f"Received {self.dynamic_test_lookback_length}."
+            )
+        if self.train_horizon_end_index >= self.train_days:
+            raise ValueError("Train horizon must lie fully inside the train split.")
+        if self.test_horizon_start_index < self.train_days:
+            raise ValueError("Test horizon must lie fully inside the test split.")
+
+        train_spec = self._build_window_spec(
+            split_name="train",
+            horizon_start_index=self.train_horizon_start_index,
+            horizon_end_index=self.train_horizon_end_index,
+            lookback_length=self.dynamic_train_lookback_length,
+        )
+        test_spec = self._build_window_spec(
+            split_name="test",
+            horizon_start_index=self.test_horizon_start_index,
+            horizon_end_index=self.test_horizon_end_index,
+            lookback_length=self.dynamic_test_lookback_length,
+        )
+
+        self.train_window_specs = [train_spec]
+        self.test_window_specs = [test_spec]
+        self.analysis_window_spec = test_spec
+        self.model_lookback = max(
+            self.dynamic_train_lookback_length,
+            self.dynamic_test_lookback_length,
+        )
+        self.legal_train_windows = 1
+        self.legal_test_windows = 1
+        self.available_analysis_windows = 1
 
     def _load(self) -> None:
         header = pd.read_csv(self.csv_path, nrows=0).columns.tolist()
@@ -190,7 +301,6 @@ class PortfolioPanelDataset:
             raise ValueError(
                 f"Parsed T={self.parsed_t} from file name but CSV contains {len(self.time_index)} time points."
             )
-        self._validate_num_stocks()
 
         full_index = pd.MultiIndex.from_product(
             [self.stock_ids, self.time_index],
@@ -216,8 +326,7 @@ class PortfolioPanelDataset:
                 .to_numpy(dtype=np.float32)
             )
             stock_arrays.append(pivot)
-        self.stock_features_raw = np.stack(stock_arrays, axis=-1)
-        self.price_array = self.stock_features_raw[..., -1].copy()
+        full_stock_features_raw = np.stack(stock_arrays, axis=-1)
 
         self.market_features_raw = (
             frame.groupby("time_index")[MARKET_FEATURE_COLUMNS]
@@ -226,19 +335,20 @@ class PortfolioPanelDataset:
             .to_numpy(dtype=np.float32)
         )
 
+        selected_stock_indices = self._resolve_selected_stock_indices()
+        self.selected_stock_ids = [self.stock_ids[index] for index in selected_stock_indices.tolist()]
+        self.stock_features_raw = full_stock_features_raw[selected_stock_indices]
+        self.price_array = self.stock_features_raw[..., -1].copy()
+
+        if not 0.0 < self.config.train_ratio < 1.0:
+            raise ValueError("DataConfig.train_ratio must be between 0 and 1.")
         self.train_days = int(self.parsed_t * self.config.train_ratio)
         self.test_days = self.parsed_t - self.train_days
-        self.analysis_entry_day = self.config.resolved_entry_day()
-        default_exit_day = self.parsed_t - 1
-        self.analysis_exit_day = self.config.analysis_exit_day or default_exit_day
-        if self.analysis_exit_day <= self.analysis_entry_day:
-            raise ValueError("analysis_exit_day must be greater than analysis_entry_day.")
-        if self.analysis_exit_day > self.parsed_t:
-            raise ValueError("analysis_exit_day exceeds the available time range.")
-
-        self.entry_index = self.analysis_entry_day - 1
-        self.exit_index = self.analysis_exit_day - 1
-        self.holding_period = self.exit_index - self.entry_index
+        if self.train_days <= 0 or self.test_days <= 0:
+            raise ValueError(
+                "train_ratio must produce non-empty train and test splits. "
+                f"Received train_days={self.train_days}, test_days={self.test_days}."
+            )
 
         self.stock_scaler = Standardizer().fit(
             self.stock_features_raw[:, : self.train_days, :].reshape(-1, len(STOCK_FEATURE_COLUMNS))
@@ -247,17 +357,7 @@ class PortfolioPanelDataset:
         self.stock_features_scaled = self.stock_scaler.transform(self.stock_features_raw)
         self.market_features_scaled = self.market_scaler.transform(self.market_features_raw)
 
-        self.selected_stock_ids = list(self.stock_ids)
-        selected_n = len(self.selected_stock_ids)
-
-        self.legal_train_windows = self._count_legal_windows(self.train_days)
-        self.legal_test_windows = self._count_legal_windows(self.test_days)
-        self.analysis_window_start_index = self.entry_index - self.lookback
-        self.available_analysis_windows = int(
-            0 <= self.analysis_window_start_index
-            and self.entry_index < self.exit_index
-            and self.exit_index < self.parsed_t
-        )
+        self._initialize_single_sample_windows()
 
         self.metadata = PanelMetadata(
             source_path=str(self.csv_path),
@@ -265,33 +365,28 @@ class PortfolioPanelDataset:
             parsed_t=self.parsed_t,
             csv_unique_stocks=len(self.stock_ids),
             csv_unique_times=len(self.time_index),
+            total_num_days=self.parsed_t,
             train_days=self.train_days,
             test_days=self.test_days,
-            lookback=self.lookback,
-            analysis_entry_day=self.analysis_entry_day,
-            analysis_exit_day=self.analysis_exit_day,
+            train_split_length=self.train_days,
+            test_split_length=self.test_days,
+            analysis_horizon_days=self.analysis_horizon_days,
+            train_horizon_start_index=self.train_horizon_start_index,
+            train_horizon_end_index=self.train_horizon_end_index,
+            test_horizon_start_index=self.test_horizon_start_index,
+            test_horizon_end_index=self.test_horizon_end_index,
+            dynamic_train_lookback_length=self.dynamic_train_lookback_length,
+            dynamic_test_lookback_length=self.dynamic_test_lookback_length,
+            model_lookback=self.model_lookback,
             legal_train_windows=self.legal_train_windows,
             legal_test_windows=self.legal_test_windows,
+            train_window_count=len(self.train_window_specs),
+            test_window_count=len(self.test_window_specs),
             available_analysis_windows=self.available_analysis_windows,
             analysis_only=True,
-            selected_num_stocks=selected_n,
+            selected_num_stocks=len(self.selected_stock_ids),
             effective_time_steps=self.parsed_t,
         )
-
-        if self.legal_train_windows == 0 and self.legal_test_windows == 0:
-            warnings.warn(
-                "This dataset yields 0 legal train windows and 0 legal test windows under the fixed sample definition. "
-                "Only the single cross-boundary analysis window is available.",
-                RuntimeWarning,
-                stacklevel=2,
-            )
-
-    def _count_legal_windows(self, split_length: int) -> int:
-        return max(0, split_length - self.lookback - self.holding_period)
-
-    @property
-    def total_window_count(self) -> int:
-        return max(0, self.parsed_t - self.lookback - self.holding_period)
 
     @property
     def num_stocks(self) -> int:
@@ -301,18 +396,28 @@ class PortfolioPanelDataset:
     def num_times(self) -> int:
         return self.parsed_t
 
-    def get_window(self, start_index: int) -> dict[str, np.ndarray]:
-        if start_index < 0 or start_index >= self.total_window_count:
-            raise IndexError(f"Window start_index={start_index} is out of range for total_window_count={self.total_window_count}.")
+    def get_window(self, window_spec: WindowSpec) -> dict[str, np.ndarray]:
+        lookback_start_index = window_spec.start_index
+        lookback_stop_index = lookback_start_index + window_spec.lookback_length
+        horizon_start_index = window_spec.horizon_start_index
+        horizon_end_index = window_spec.horizon_end_index
 
-        lookback_stop = start_index + self.lookback
-        entry_index = lookback_stop
-        exit_index = lookback_stop + self.holding_period
+        if lookback_start_index != 0:
+            raise ValueError("The fixed single-sample rule expects lookback_start_index=0.")
+        if lookback_stop_index != horizon_start_index:
+            raise ValueError(
+                "Lookback must end exactly where the horizon starts under the fixed single-sample rule."
+            )
+        if not (0 <= horizon_start_index < horizon_end_index < self.parsed_t):
+            raise IndexError(
+                "Invalid horizon indices for the requested window: "
+                f"start={horizon_start_index}, end={horizon_end_index}, total_num_days={self.parsed_t}."
+            )
 
-        x_stock = self.stock_features_scaled[:, start_index:lookback_stop, :]
-        x_market = self.market_features_scaled[start_index:lookback_stop]
-        entry_prices = self.price_array[:, entry_index]
-        exit_prices = self.price_array[:, exit_index]
+        x_stock = self.stock_features_scaled[:, lookback_start_index:lookback_stop_index, :]
+        x_market = self.market_features_scaled[lookback_start_index:lookback_stop_index]
+        entry_prices = self.price_array[:, horizon_start_index]
+        exit_prices = self.price_array[:, horizon_end_index]
         r_stock = (exit_prices / entry_prices) - 1.0
         stock_indices = np.arange(self.num_stocks, dtype=np.int64)
 
@@ -323,31 +428,23 @@ class PortfolioPanelDataset:
             "stock_indices": stock_indices,
         }
 
-    def get_train_val_window_indices(self) -> tuple[list[int], list[int]]:
-        if self.total_window_count < 2:
-            return [], []
-
-        train_count = max(1, int(self.total_window_count * self.config.train_ratio))
-        if train_count >= self.total_window_count:
-            train_count = self.total_window_count - 1
-
-        train_indices = list(range(train_count))
-        val_indices = list(range(train_count, self.total_window_count))
-        return train_indices, val_indices
-
     def build_train_val_datasets(self) -> tuple[PortfolioWindowDataset, PortfolioWindowDataset]:
-        train_indices, val_indices = self.get_train_val_window_indices()
-        return PortfolioWindowDataset(self, train_indices), PortfolioWindowDataset(self, val_indices)
+        return (
+            PortfolioWindowDataset(self, list(self.train_window_specs)),
+            PortfolioWindowDataset(self, list(self.test_window_specs)),
+        )
 
     def get_analysis_window(self) -> dict[str, np.ndarray]:
         if self.available_analysis_windows != 1:
             raise RuntimeError(
-                "The configured analysis window is unavailable. "
-                f"entry_day={self.analysis_entry_day}, exit_day={self.analysis_exit_day}, "
-                f"lookback={self.lookback}, total_days={self.parsed_t}."
+                "The configured test analysis window is unavailable. "
+                f"test_horizon_start_index={self.test_horizon_start_index}, "
+                f"test_horizon_end_index={self.test_horizon_end_index}, "
+                f"lookback_length={self.analysis_window_spec.lookback_length}, "
+                f"total_num_days={self.parsed_t}."
             )
 
-        window = self.get_window(start_index=self.analysis_window_start_index)
+        window = self.get_window(self.analysis_window_spec)
         return {
             "x_stock": window["x_stock"][np.newaxis, ...],
             "x_market": window["x_market"][np.newaxis, ...],

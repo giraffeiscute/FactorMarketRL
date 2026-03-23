@@ -10,11 +10,13 @@ from typing import Any
 
 import torch
 from torch.utils.data import DataLoader
+from tqdm.auto import tqdm
 
 if __package__ is None or __package__ == "":
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from portfolio_attention.config import DataConfig, ModelConfig, PathsConfig, TrainConfig
     from portfolio_attention.dataset import PortfolioPanelDataset
+    from portfolio_attention.evaluate import run_diagnostic_evaluation
     from portfolio_attention.losses import build_loss
     from portfolio_attention.model import PortfolioAttentionModel
     from portfolio_attention.utils import (
@@ -27,6 +29,7 @@ if __package__ is None or __package__ == "":
 else:
     from .config import DataConfig, ModelConfig, PathsConfig, TrainConfig
     from .dataset import PortfolioPanelDataset
+    from .evaluate import run_diagnostic_evaluation
     from .losses import build_loss
     from .model import PortfolioAttentionModel
     from .utils import append_log, ensure_output_dirs, resolve_device, save_json, set_seed
@@ -46,8 +49,30 @@ def _move_batch_to_device(batch: dict[str, Any], device: torch.device) -> dict[s
     }
 
 
-def _resolve_model_config(model_config: ModelConfig, data_config: DataConfig) -> ModelConfig:
-    return replace(model_config, lookback=data_config.lookback)
+def _resolve_model_config(model_config: ModelConfig, dataset: PortfolioPanelDataset) -> ModelConfig:
+    return replace(model_config, lookback=dataset.model_lookback)
+
+
+def _append_dataset_split_summary(log_path: Path, dataset: PortfolioPanelDataset) -> None:
+    metadata = dataset.metadata
+    append_log(
+        log_path,
+        (
+            "Dataset split summary: "
+            f"total_num_days={metadata.total_num_days} "
+            f"train_split_length={metadata.train_split_length} "
+            f"test_split_length={metadata.test_split_length} "
+            f"analysis_horizon_days={metadata.analysis_horizon_days} "
+            f"train_horizon_start_index={metadata.train_horizon_start_index} "
+            f"train_horizon_end_index={metadata.train_horizon_end_index} "
+            f"test_horizon_start_index={metadata.test_horizon_start_index} "
+            f"test_horizon_end_index={metadata.test_horizon_end_index} "
+            f"dynamic_train_lookback_length={metadata.dynamic_train_lookback_length} "
+            f"dynamic_test_lookback_length={metadata.dynamic_test_lookback_length} "
+            f"train_window_count={metadata.train_window_count} "
+            f"test_window_count={metadata.test_window_count}"
+        ),
+    )
 
 
 def _run_loss_step(
@@ -132,7 +157,7 @@ def run_diagnostic_training(
     device = resolve_device(train_config.device)
 
     dataset = PortfolioPanelDataset(data_config)
-    resolved_model_config = _resolve_model_config(model_config, data_config)
+    resolved_model_config = _resolve_model_config(model_config, dataset)
     model = PortfolioAttentionModel(resolved_model_config, num_stocks=dataset.num_stocks).to(device)
     optimizer = torch.optim.Adam(
         model.parameters(),
@@ -164,9 +189,10 @@ def run_diagnostic_training(
             f"market={dataset.loaded_market_feature_columns}"
         ),
     )
+    _append_dataset_split_summary(log_path, dataset)
     append_log(
         log_path,
-        "Running diagnostic mode because the fixed T=81 sample definition yields 0 legal train windows and 0 legal test windows.",
+        "Running diagnostic mode on the single fixed test sample defined by the test-split tail horizon.",
     )
 
     loss_value = None
@@ -233,7 +259,7 @@ def run_epoch_training(
             "Use diagnostic mode for single-window analysis."
         )
 
-    resolved_model_config = _resolve_model_config(model_config, data_config)
+    resolved_model_config = _resolve_model_config(model_config, dataset)
     model = PortfolioAttentionModel(resolved_model_config, num_stocks=dataset.num_stocks).to(device)
     optimizer = torch.optim.Adam(
         model.parameters(),
@@ -264,6 +290,7 @@ def run_epoch_training(
             f"market={dataset.loaded_market_feature_columns}"
         ),
     )
+    _append_dataset_split_summary(log_path, dataset)
     append_log(
         log_path,
         (
@@ -277,59 +304,88 @@ def run_epoch_training(
     best_epoch = 0
     epochs_without_improvement = 0
     epochs_completed = 0
-    history: list[dict[str, float | int]] = []
     best_checkpoint_path = paths.checkpoints_dir / train_config.train_best_checkpoint_name
     last_checkpoint_path = paths.checkpoints_dir / train_config.train_last_checkpoint_name
 
-    for epoch in range(1, train_config.num_epochs + 1):
-        model.train()
-        total_train_loss = 0.0
-        total_train_return = 0.0
-        total_train_samples = 0
+    with tqdm(
+        range(1, train_config.num_epochs + 1),
+        total=train_config.num_epochs,
+        desc=f"Epoch 0/{train_config.num_epochs}",
+    ) as epoch_bar:
+        for epoch in epoch_bar:
+            model.train()
+            total_train_loss = 0.0
+            total_train_return = 0.0
+            total_train_samples = 0
 
-        for raw_batch in train_loader:
-            batch = _move_batch_to_device(raw_batch, device)
-            optimizer.zero_grad(set_to_none=True)
-            loss, portfolio_return = _run_loss_step(model, batch, train_config.loss_name)
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), train_config.grad_clip_norm)
-            optimizer.step()
+            for raw_batch in train_loader:
+                batch = _move_batch_to_device(raw_batch, device)
+                optimizer.zero_grad(set_to_none=True)
+                loss, portfolio_return = _run_loss_step(model, batch, train_config.loss_name)
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), train_config.grad_clip_norm)
+                optimizer.step()
 
-            batch_size = int(batch["x_stock"].shape[0])
-            total_train_loss += float(loss.detach().cpu().item()) * batch_size
-            total_train_return += float(portfolio_return.mean().detach().cpu().item()) * batch_size
-            total_train_samples += batch_size
+                batch_size = int(batch["x_stock"].shape[0])
+                total_train_loss += float(loss.detach().cpu().item()) * batch_size
+                total_train_return += float(portfolio_return.mean().detach().cpu().item()) * batch_size
+                total_train_samples += batch_size
 
-        if total_train_samples == 0:
-            raise RuntimeError("Train loader produced no samples.")
+            if total_train_samples == 0:
+                raise RuntimeError("Train loader produced no samples.")
 
-        train_loss = total_train_loss / total_train_samples
-        train_return = total_train_return / total_train_samples
-        val_loss, val_return = _evaluate_epoch(model, val_loader, device, train_config.loss_name)
+            train_loss = total_train_loss / total_train_samples
+            train_return = total_train_return / total_train_samples
+            val_loss, val_return = _evaluate_epoch(model, val_loader, device, train_config.loss_name)
 
-        epoch_metrics: dict[str, float | int] = {
-            "epoch": epoch,
-            "train_loss": train_loss,
-            "train_portfolio_return": train_return,
-            "val_loss": val_loss,
-            "val_portfolio_return": val_return,
-        }
-        history.append(epoch_metrics)
-        epochs_completed = epoch
+            epoch_metrics: dict[str, float | int] = {
+                "epoch": epoch,
+                "train_loss": train_loss,
+                "train_portfolio_return": train_return,
+                "val_loss": val_loss,
+                "val_portfolio_return": val_return,
+            }
+            epochs_completed = epoch
 
-        append_log(
-            log_path,
-            (
-                f"epoch={epoch} train_loss={train_loss:.8f} "
-                f"train_portfolio_return={train_return:.8f} "
-                f"val_loss={val_loss:.8f} val_portfolio_return={val_return:.8f}"
-            ),
-        )
 
-        if val_loss < best_val_loss:
-            best_val_loss = val_loss
-            best_epoch = epoch
-            epochs_without_improvement = 0
+            epoch_bar.set_description(f"Epoch {epoch}/{train_config.num_epochs}")
+            epoch_bar.set_postfix(
+                train_loss=f"{epoch_metrics['train_loss']:.6f}",
+                train_ret=f"{epoch_metrics['train_portfolio_return']:.6f}",
+                val_loss=f"{epoch_metrics['val_loss']:.6f}",
+                val_ret=f"{epoch_metrics['val_portfolio_return']:.6f}",
+            )
+
+            append_log(
+                log_path,
+                (
+                    f"epoch={epoch} train_loss={train_loss:.8f} "
+                    f"train_portfolio_return={train_return:.8f} "
+                    f"val_loss={val_loss:.8f} val_portfolio_return={val_return:.8f}"
+                ),
+            )
+
+            if val_loss < best_val_loss:
+                best_val_loss = val_loss
+                best_epoch = epoch
+                epochs_without_improvement = 0
+                torch.save(
+                    _build_checkpoint_payload(
+                        model=model,
+                        optimizer=optimizer,
+                        resolved_model_config=resolved_model_config,
+                        data_config=data_config,
+                        train_config=train_config,
+                        dataset=dataset,
+                        epoch=epoch,
+                        best_val_loss=best_val_loss,
+                        extra_metrics=epoch_metrics,
+                    ),
+                    best_checkpoint_path,
+                )
+            else:
+                epochs_without_improvement += 1
+
             torch.save(
                 _build_checkpoint_payload(
                     model=model,
@@ -342,35 +398,32 @@ def run_epoch_training(
                     best_val_loss=best_val_loss,
                     extra_metrics=epoch_metrics,
                 ),
-                best_checkpoint_path,
+                last_checkpoint_path,
             )
-        else:
-            epochs_without_improvement += 1
 
-        torch.save(
-            _build_checkpoint_payload(
-                model=model,
-                optimizer=optimizer,
-                resolved_model_config=resolved_model_config,
-                data_config=data_config,
-                train_config=train_config,
-                dataset=dataset,
-                epoch=epoch,
-                best_val_loss=best_val_loss,
-                extra_metrics=epoch_metrics,
-            ),
-            last_checkpoint_path,
-        )
+            should_stop_early = epochs_without_improvement >= train_config.early_stopping_patience
+            if train_config.epoch_print_interval <= 0:
+                raise ValueError("TrainConfig.epoch_print_interval must be positive.")
+            if epoch % train_config.epoch_print_interval == 0 or epoch == train_config.num_epochs or should_stop_early:
+                tqdm.write(
+                    (
+                        f"[Epoch {epoch}/{train_config.num_epochs}] "
+                        f"train_loss={epoch_metrics['train_loss']:.6f} "
+                        f"train_portfolio_return={epoch_metrics['train_portfolio_return']:.6f} "
+                        f"val_loss={epoch_metrics['val_loss']:.6f} "
+                        f"val_portfolio_return={epoch_metrics['val_portfolio_return']:.6f}"
+                    )
+                )
 
-        if epochs_without_improvement >= train_config.early_stopping_patience:
-            append_log(
-                log_path,
-                (
-                    "Early stopping triggered with "
-                    f"patience={train_config.early_stopping_patience} at epoch={epoch}."
-                ),
-            )
-            break
+            if should_stop_early:
+                append_log(
+                    log_path,
+                    (
+                        "Early stopping triggered with "
+                        f"patience={train_config.early_stopping_patience} at epoch={epoch}."
+                    ),
+                )
+                break
 
     if best_epoch == 0:
         raise RuntimeError("Train loop did not record a best checkpoint.")
@@ -389,8 +442,7 @@ def run_epoch_training(
         "epochs_completed": epochs_completed,
         "best_epoch": best_epoch,
         "best_val_loss": best_val_loss,
-        "last_train_loss": history[-1]["train_loss"],
-        "last_val_loss": history[-1]["val_loss"],
+
         "train_window_count": len(train_dataset),
         "val_window_count": len(val_dataset),
         "early_stopping_patience": train_config.early_stopping_patience,
@@ -398,9 +450,16 @@ def run_epoch_training(
         "best_checkpoint_path": str(best_checkpoint_path),
         "last_checkpoint_path": str(last_checkpoint_path),
         "metadata": dataset.metadata.as_dict(),
-        "history": history,
+
     }
     save_json(metrics, paths.metrics_dir / "train_metrics.json")
+    append_log(log_path, f"Refreshing predictions from best checkpoint: {best_checkpoint_path}.")
+    run_diagnostic_evaluation(
+        data_config=data_config,
+        paths=paths,
+        checkpoint_path=best_checkpoint_path,
+        device_name=train_config.device,
+    )
     return metrics
 
 
@@ -429,6 +488,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--num-stocks", type=int, default=argparse.SUPPRESS)
     parser.add_argument("--batch-size", type=int, default=argparse.SUPPRESS)
     parser.add_argument("--num-epochs", type=int, default=argparse.SUPPRESS)
+    parser.add_argument("--epoch-log-interval", type=int, default=argparse.SUPPRESS)
     parser.add_argument("--weight-decay", type=float, default=argparse.SUPPRESS)
     parser.add_argument("--grad-clip-norm", type=float, default=argparse.SUPPRESS)
     parser.add_argument(
@@ -472,6 +532,8 @@ def resolve_runtime_configs_from_args(
         train_overrides["batch_size"] = args_dict["batch_size"]
     if "num_epochs" in args_dict:
         train_overrides["num_epochs"] = args_dict["num_epochs"]
+    if "epoch_print_interval" in args_dict:
+        train_overrides["epoch_print_interval"] = args_dict["epoch_print_interval"]
     if "weight_decay" in args_dict:
         train_overrides["weight_decay"] = args_dict["weight_decay"]
     if "grad_clip_norm" in args_dict:
