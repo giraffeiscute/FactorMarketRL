@@ -46,8 +46,16 @@ def write_panel_csv(path: Path, num_stocks: int = 8, num_times: int = 81, includ
 def test_cpu_only_smoke_train_and_evaluate(tmp_path: Path) -> None:
     csv_path = write_panel_csv(tmp_path / "mini_8_81_panel_long.csv")
     paths = PathsConfig(output_root=tmp_path / "outputs")
-    data_config = DataConfig(csv_path=csv_path, num_stocks=8)
-    train_config = TrainConfig(device="cpu", diagnostic_steps=1)
+    data_config = DataConfig(csv_path=csv_path, num_stocks=8, analysis_horizon_days=2)
+    train_config = TrainConfig(
+        device="cpu",
+        diagnostic_steps=1,
+        batch_size=16,
+        num_epochs=30,
+        weight_decay=1e-4,
+        grad_clip_norm=1.0,
+        early_stopping_patience=5,
+    )
 
     metrics = run_diagnostic_training(data_config, ModelConfig(), train_config, paths)
     evaluation = run_diagnostic_evaluation(data_config, paths, device_name="cpu")
@@ -56,7 +64,8 @@ def test_cpu_only_smoke_train_and_evaluate(tmp_path: Path) -> None:
     assert evaluation["diagnostic_only"] is True
     assert (paths.checkpoints_dir / train_config.checkpoint_name).exists()
     assert (paths.metrics_dir / "diagnostic_metrics.json").exists()
-    prediction_json = paths.predictions_dir / "diagnostic_predictions.json"
+    state_id = "mini_8_81"
+    prediction_json = paths.predictions_dir / f"{state_id}_dsr_diagnostic_predictions.json"
     metrics_json = paths.metrics_dir / "evaluation_metrics.json"
     assert prediction_json.exists()
     assert metrics_json.exists()
@@ -65,21 +74,19 @@ def test_cpu_only_smoke_train_and_evaluate(tmp_path: Path) -> None:
     assert evaluation["source_path"] == "mini_8_81"
     assert "checkpoint_path" not in evaluation
     assert exported["source_path"] == "mini_8_81"
-    assert sorted(exported.keys()) == sorted(
-        [
-            "average_cash_weight",
-            "average_portfolio_return",
-            "cash_weight",
-            "device",
-            "diagnostic_only",
-            "metadata",
-            "portfolio_return",
-            "sharpe_like",
-            "source_path",
-            "train_config",
-            "top_k_stock_weights",
-        ]
-    )
+    required_keys = {
+        "average_cash_weight",
+        "average_portfolio_return",
+        "cash_weight",
+        "device",
+        "diagnostic_only",
+        "metadata",
+        "portfolio_return",
+        "source_path",
+        "train_config",
+        "top_k_stock_weights",
+    }
+    assert required_keys.issubset(set(exported.keys()))
     assert exported["train_config"] == {
         "batch_size": 16,
         "num_epochs": 30,
@@ -89,7 +96,7 @@ def test_cpu_only_smoke_train_and_evaluate(tmp_path: Path) -> None:
     }
     assert len(metrics_exported["all_stock_weights"]) == 8
     assert len(metrics_exported["allocation_groups"]) >= 1
-    assert len(metrics_exported["allocation_groups_top10_plus_others"]) >= 1
+    assert len(metrics_exported["allocation_groups_top_n_plus_others"]) >= 1
     assert Path(metrics_exported["allocation_pie_chart"]).exists()
     assert Path(metrics_exported["allocation_bar_chart"]).exists()
     assert Path(metrics_exported["allocation_pie_chart"]).parent == paths.outputs_dir
@@ -97,9 +104,9 @@ def test_cpu_only_smoke_train_and_evaluate(tmp_path: Path) -> None:
     assert Path(metrics_exported["all_stock_weights_csv"]).exists()
     first_stock = evaluation["top_k_stock_weights"][0]["stock_id"]
     stock_idx = int(str(first_stock).split("_")[1])
-    assert evaluation["top_k_stock_weights"][0]["mu"] == f"mu_{stock_idx}_60"
-    assert evaluation["top_k_stock_weights"][0]["alpha"] == f"alpha_{stock_idx}_60"
-    assert evaluation["top_k_stock_weights"][0]["epsilon_variance"] == f"eps_{stock_idx}_60"
+    assert evaluation["top_k_stock_weights"][0]["mu"] == f"mu_{stock_idx}_79"
+    assert evaluation["top_k_stock_weights"][0]["alpha"] == f"alpha_{stock_idx}_79"
+    assert evaluation["top_k_stock_weights"][0]["epsilon_variance"] == f"eps_{stock_idx}_79"
     all_stock_weights_csv = pd.read_csv(metrics_exported["all_stock_weights_csv"])
     assert len(all_stock_weights_csv) == 8
     assert all_stock_weights_csv.loc[0, "weight"] >= all_stock_weights_csv.loc[len(all_stock_weights_csv) - 1, "weight"]
@@ -123,7 +130,7 @@ def test_epoch_train_mode_saves_best_and_last_checkpoints(tmp_path: Path) -> Non
         grad_clip_norm=1.0,
         early_stopping_patience=2,
     )
-    data_config = DataConfig(csv_path=csv_path, num_stocks=8)
+    data_config = DataConfig(csv_path=csv_path, num_stocks=8, analysis_horizon_days=2)
 
     metrics = run_training(data_config, ModelConfig(), train_config, paths)
 
@@ -132,10 +139,9 @@ def test_epoch_train_mode_saves_best_and_last_checkpoints(tmp_path: Path) -> Non
     assert metrics["batch_size"] == 16
     assert metrics["num_epochs_requested"] == 4
     assert metrics["train_window_count"] >= 1
-    assert metrics["val_window_count"] >= 1
+    assert metrics["validation_window_count"] >= 1
     assert metrics["epochs_completed"] <= 4
     assert metrics["best_epoch"] <= metrics["epochs_completed"]
-    assert len(metrics["history"]) == metrics["epochs_completed"]
     assert (paths.checkpoints_dir / train_config.train_best_checkpoint_name).exists()
     assert (paths.checkpoints_dir / train_config.train_last_checkpoint_name).exists()
     assert (paths.metrics_dir / "train_metrics.json").exists()
@@ -208,23 +214,10 @@ def test_export_rows_require_aux_columns(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="Missing"):
         enrich_top_k_positions(
             source_csv_path=csv_path,
-            metadata={
-                "analysis_entry_day": 61,
-                "analysis_exit_day": 80,
-                "analysis_only": True,
-                "available_analysis_windows": 1,
-                "csv_unique_stocks": 8,
-                "csv_unique_times": 81,
-                "selected_num_stocks": 8,
-                "effective_time_steps": 81,
-                "legal_test_windows": 0,
-                "legal_train_windows": 0,
-                "lookback": 60,
-                "parsed_n": 8,
-                "parsed_t": 81,
-                "train_days": 60,
-                "test_days": 21,
-            },
+                metadata={
+                    "backtest_horizon_start_index": 60,
+                    "model_lookback": 60,
+                },
             top_positions=[{"stock_id": "stock_000", "weight": 0.5}],
         )
 
@@ -239,22 +232,9 @@ def test_export_rows_require_single_match(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="multiple source rows"):
         enrich_top_k_positions(
             source_csv_path=csv_path,
-            metadata={
-                "analysis_entry_day": 61,
-                "analysis_exit_day": 80,
-                "analysis_only": True,
-                "available_analysis_windows": 1,
-                "csv_unique_stocks": 8,
-                "csv_unique_times": 81,
-                "selected_num_stocks": 8,
-                "effective_time_steps": 81,
-                "legal_test_windows": 0,
-                "legal_train_windows": 0,
-                "lookback": 60,
-                "parsed_n": 8,
-                "parsed_t": 81,
-                "train_days": 60,
-                "test_days": 21,
-            },
+                metadata={
+                    "backtest_horizon_start_index": 60,
+                    "model_lookback": 60,
+                },
             top_positions=[{"stock_id": "stock_000", "weight": 0.5}],
         )

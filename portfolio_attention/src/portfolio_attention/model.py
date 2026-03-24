@@ -17,23 +17,26 @@ class PortfolioAttentionModel(nn.Module):
     Stock identity position is applied as `x_{s,t} = [z_{s,t}; e_s]`.
     """
 
-    def __init__(self, config: ModelConfig, *, num_stocks: int) -> None:
+    def __init__(self, config: ModelConfig, *, num_stocks: int, max_lookback: int) -> None:
         super().__init__()
         if num_stocks <= 0:
             raise ValueError("num_stocks must be positive before model construction.")
+        if max_lookback <= 0:
+            raise ValueError("max_lookback must be positive before model construction.")
         attention_input_dim = config.cross_sectional_dim + config.stock_id_embedding_dim
         if attention_input_dim % config.attention_heads != 0:
             raise ValueError("attention_input_dim must be divisible by attention_heads.")
 
         self.config = config
         self.num_stocks = num_stocks
+        self.max_lookback = max_lookback
         self.time_position_mode = "add"
         self.id_position_mode = "concat"
 
         self.stock_input_proj = nn.Linear(config.stock_feature_dim, config.stock_temporal_dim)
         self.market_input_proj = nn.Linear(config.market_feature_dim, config.market_temporal_dim)
-        self.stock_time_position = nn.Embedding(config.lookback, config.stock_temporal_dim)
-        self.market_time_position = nn.Embedding(config.lookback, config.market_temporal_dim)
+        self.stock_time_position = nn.Embedding(max_lookback, config.stock_temporal_dim)
+        self.market_time_position = nn.Embedding(max_lookback, config.market_temporal_dim)
 
         stock_temporal_heads = 2 if config.stock_temporal_dim % 2 == 0 else 1
         market_temporal_heads = 2 if config.market_temporal_dim % 2 == 0 else 1
@@ -76,6 +79,10 @@ class PortfolioAttentionModel(nn.Module):
         if temporal_content.ndim != 3:
             raise ValueError("temporal_content must have shape [batch_like, lookback, hidden].")
         sequence_length = temporal_content.shape[1]
+        if sequence_length > self.max_lookback:
+            raise ValueError(
+                f"Input sequence length {sequence_length} exceeds model max_lookback {self.max_lookback}."
+            )
         positions = torch.arange(sequence_length, device=temporal_content.device)
         if branch == "stock":
             pos_embedding = self.stock_time_position(positions)

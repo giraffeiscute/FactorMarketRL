@@ -440,8 +440,27 @@ def run_diagnostic_evaluation(
     resolved_checkpoint = checkpoint_path or (paths.checkpoints_dir / TrainConfig().checkpoint_name)
     checkpoint = torch.load(resolved_checkpoint, map_location=device, weights_only=False)
     _validate_checkpoint_metadata(checkpoint, dataset)
-    model_config = ModelConfig(**checkpoint["model_config"])
-    model = PortfolioAttentionModel(model_config, num_stocks=dataset.num_stocks).to(device)
+
+    # Filter model_config to remove legacy 'lookback' field if it exists,
+    # and extract max_lookback from checkpoint or metadata.
+    checkpoint_model_config = checkpoint["model_config"]
+    max_lookback = checkpoint.get("max_lookback")
+    if max_lookback is None:
+        # Fallback to metadata or old lookback field in model_config
+        max_lookback = checkpoint.get("metadata", {}).get("model_lookback")
+        if max_lookback is None:
+            max_lookback = checkpoint_model_config.get("lookback", 60)
+
+    filtered_config_dict = {
+        k: v for k, v in checkpoint_model_config.items()
+        if k in ModelConfig.__dataclass_fields__
+    }
+    model_config = ModelConfig(**filtered_config_dict)
+    model = PortfolioAttentionModel(
+        model_config,
+        num_stocks=dataset.num_stocks,
+        max_lookback=int(max_lookback),
+    ).to(device)
     model.load_state_dict(checkpoint["model_state_dict"])
     model.eval()
 

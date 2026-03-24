@@ -76,10 +76,6 @@ def _move_batch_to_device(batch: dict[str, Any], device: torch.device) -> dict[s
     }
 
 
-def _resolve_model_config(model_config: ModelConfig, dataset: PortfolioPanelDataset) -> ModelConfig:
-    return replace(model_config, lookback=dataset.model_lookback)
-
-
 def _build_terminal_summary(payload: dict[str, Any]) -> dict[str, Any]:
     summary: dict[str, Any] = {}
     final_backtest = payload.get("final_backtest")
@@ -175,7 +171,7 @@ def _build_checkpoint_payload(
     *,
     model: PortfolioAttentionModel,
     optimizer: torch.optim.Optimizer,
-    resolved_model_config: ModelConfig,
+    model_config: ModelConfig,
     data_config: DataConfig,
     train_config: TrainConfig,
     dataset: PortfolioPanelDataset,
@@ -188,7 +184,8 @@ def _build_checkpoint_payload(
         "best_val_loss": best_val_loss,
         "model_state_dict": model.state_dict(),
         "optimizer_state_dict": optimizer.state_dict(),
-        "model_config": resolved_model_config.as_dict(),
+        "model_config": model_config.as_dict(),
+        "max_lookback": model.max_lookback,
         "data_config": _serialize_config(data_config),
         "train_config": _serialize_config(train_config),
         "metadata": dataset.metadata.as_dict(),
@@ -235,8 +232,11 @@ def run_diagnostic_training(
     device = resolve_device(train_config.device)
 
     dataset = PortfolioPanelDataset(data_config)
-    resolved_model_config = _resolve_model_config(model_config, dataset)
-    model = PortfolioAttentionModel(resolved_model_config, num_stocks=dataset.num_stocks).to(device)
+    model = PortfolioAttentionModel(
+        model_config,
+        num_stocks=dataset.num_stocks,
+        max_lookback=dataset.model_lookback,
+    ).to(device)
     optimizer = torch.optim.Adam(
         model.parameters(),
         lr=train_config.learning_rate,
@@ -291,7 +291,7 @@ def run_diagnostic_training(
         _build_checkpoint_payload(
             model=model,
             optimizer=optimizer,
-            resolved_model_config=resolved_model_config,
+            model_config=model_config,
             data_config=data_config,
             train_config=train_config,
             dataset=dataset,
@@ -336,8 +336,11 @@ def run_epoch_training(
     if train_config.epoch_print_interval <= 0:
         raise ValueError("TrainConfig.epoch_print_interval must be positive.")
 
-    resolved_model_config = _resolve_model_config(model_config, dataset)
-    model = PortfolioAttentionModel(resolved_model_config, num_stocks=dataset.num_stocks).to(device)
+    model = PortfolioAttentionModel(
+        model_config,
+        num_stocks=dataset.num_stocks,
+        max_lookback=dataset.model_lookback,
+    ).to(device)
     optimizer = torch.optim.Adam(
         model.parameters(),
         lr=train_config.learning_rate,
@@ -452,7 +455,7 @@ def run_epoch_training(
                     _build_checkpoint_payload(
                         model=model,
                         optimizer=optimizer,
-                        resolved_model_config=resolved_model_config,
+                        model_config=model_config,
                         data_config=data_config,
                         train_config=train_config,
                         dataset=dataset,
@@ -474,7 +477,7 @@ def run_epoch_training(
                 _build_checkpoint_payload(
                     model=model,
                     optimizer=optimizer,
-                    resolved_model_config=resolved_model_config,
+                    model_config=model_config,
                     data_config=data_config,
                     train_config=train_config,
                     dataset=dataset,

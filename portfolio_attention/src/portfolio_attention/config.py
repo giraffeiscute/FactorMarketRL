@@ -15,7 +15,7 @@ def repo_root() -> Path:
 
 
 def default_data_path() -> Path:
-    return repo_root() / "toy_ff_generator" / "outputs" / "data v1" / "bear_4860_200_panel_long.csv"
+    return repo_root() / "toy_ff_generator" / "outputs" / "data v1" / "bull_4860_200_panel_long.csv"
 
 
 @dataclass
@@ -87,17 +87,14 @@ class ModelConfig:
     # 市場整體特徵的輸入維度數量。
     market_feature_dim: int = 3
 
-    # 模型回看歷史資料的時間步長。
-    lookback: int = 60
-
     # 股票時間序列編碼器的隱藏維度。
-    stock_temporal_dim: int = 64
+    stock_temporal_dim: int = 128
 
     # 市場時間序列編碼器的隱藏維度。
-    market_temporal_dim: int = 32
+    market_temporal_dim: int = 64
 
     # 橫截面特徵整合層的隱藏維度。
-    cross_sectional_dim: int = 64
+    cross_sectional_dim: int = 128
 
     # 股票 ID embedding 的維度大小。
     stock_id_embedding_dim: int = 16
