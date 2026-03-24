@@ -1,0 +1,97 @@
+{
+  "average_cash_weight": 0.00013106588448863477,
+  "average_portfolio_return": 0.02104971371591091,
+  "cash_weight": 0.00013106588448863477,
+  "device": "cuda",
+  "diagnostic_only": false,
+  "evaluation_split": "backtest",
+  "metadata": {
+    "analysis_horizon_days": 19,
+    "backtest_days": 20,
+    "backtest_horizon_end_index": 199,
+    "backtest_horizon_start_index": 181,
+    "backtest_split_end_index": 199,
+    "backtest_split_length": 20,
+    "backtest_split_ratio": 0.1,
+    "backtest_split_start_index": 180,
+    "backtest_window_count": 1,
+    "csv_unique_stocks": 4860,
+    "csv_unique_times": 200,
+    "dynamic_backtest_lookback_length": 181,
+    "dynamic_train_lookback_length": 141,
+    "dynamic_validation_lookback_length": 161,
+    "effective_time_steps": 200,
+    "model_lookback": 181,
+    "parsed_n": 4860,
+    "parsed_t": 200,
+    "selected_num_stocks": 4860,
+    "total_num_days": 200,
+    "train_days": 160,
+    "train_horizon_end_index": 159,
+    "train_horizon_start_index": 141,
+    "train_split_end_index": 159,
+    "train_split_length": 160,
+    "train_split_ratio": 0.8,
+    "train_split_start_index": 0,
+    "train_window_count": 1,
+    "validation_days": 20,
+    "validation_horizon_end_index": 179,
+    "validation_horizon_start_index": 161,
+    "validation_split_end_index": 179,
+    "validation_split_length": 20,
+    "validation_split_ratio": 0.1,
+    "validation_split_start_index": 160,
+    "validation_window_count": 1
+  },
+  "portfolio_return": 0.02104971371591091,
+  "source_path": "neutral_4860_200",
+  "top_k_stock_weights": [
+    {
+      "alpha": "0.020%",
+      "epsilon_variance": "2.000%",
+      "mu": "(0.5,-0.5,-0.5)",
+      "rank": 1,
+      "stock_id": "stock_1444",
+      "weight": 0.7596204876899719
+    },
+    {
+      "alpha": "0.030%",
+      "epsilon_variance": "2.000%",
+      "mu": "(0.5,-0.5,-0.5)",
+      "rank": 2,
+      "stock_id": "stock_4695",
+      "weight": 0.08828280121088028
+    },
+    {
+      "alpha": "-0.010%",
+      "epsilon_variance": "2.000%",
+      "mu": "(0.0,-0.5,-0.5)",
+      "rank": 3,
+      "stock_id": "stock_2897",
+      "weight": 0.06975184381008148
+    },
+    {
+      "alpha": "0.030%",
+      "epsilon_variance": "2.000%",
+      "mu": "(0.5,-0.5,-0.5)",
+      "rank": 4,
+      "stock_id": "stock_4683",
+      "weight": 0.02126365900039673
+    },
+    {
+      "alpha": "0.020%",
+      "epsilon_variance": "2.000%",
+      "mu": "(0.5,-0.5,-0.5)",
+      "rank": 5,
+      "stock_id": "stock_1442",
+      "weight": 0.007194226142019033
+    }
+  ],
+  "train_config": {
+    "batch_size": 1,
+    "early_stopping_patience": 100,
+    "grad_clip_norm": 1.0,
+    "num_epochs": 300,
+    "weight_decay": 1e-05
+  }
+}

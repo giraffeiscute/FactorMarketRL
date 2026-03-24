@@ -368,6 +368,7 @@ def export_allocation_artifacts(
     paths: PathsConfig,
     source_csv_path: Path,
     allocation_group_top_n: int,
+    loss_name: str,
 ) -> dict[str, object]:
     all_stock_positions = enrich_positions(
         aux_frame=aux_frame,
@@ -389,11 +390,11 @@ def export_allocation_artifacts(
     state_id = state_id_from_csv_path(source_csv_path)
     chart_title = (
         f"Top {allocation_group_top_n} Allocation Groups + Others + Cash: {state_id}\n"
-        f"portfolio_return={portfolio_return:.6f}"
+        f"loss_name={loss_name} | portfolio_return={portfolio_return:.6f}"
     )
-    pie_chart_path = paths.outputs_dir / f"{state_id}_allocation_pie.png"
-    bar_chart_path = paths.outputs_dir / f"{state_id}_allocation_bar.png"
-    all_stock_weights_csv_path = paths.predictions_dir / f"{state_id}_all_stock_weights.csv"
+    pie_chart_path = paths.outputs_dir / f"{state_id}_{loss_name}_allocation_pie.png"
+    bar_chart_path = paths.outputs_dir / f"{state_id}_{loss_name}_allocation_bar.png"
+    all_stock_weights_csv_path = paths.predictions_dir / f"{state_id}_{loss_name}_all_stock_weights.csv"
 
     save_all_stock_weights_csv(all_stock_positions, all_stock_weights_csv_path)
     render_allocation_pie_chart(
@@ -409,6 +410,7 @@ def export_allocation_artifacts(
 
     return {
         "source_path": state_id,
+        "loss_name": loss_name,
         "all_stock_weights": all_stock_positions,
         "all_stock_weights_csv": str(all_stock_weights_csv_path),
         "grouped_allocations": grouped_allocations,
@@ -455,7 +457,7 @@ def run_diagnostic_evaluation(
     cash_weight = float(outputs["cash_weight"][0].detach().cpu().item())
     portfolio_return = float(outputs["portfolio_return"][0].detach().cpu().item())
     checkpoint_train_config = checkpoint.get("train_config", {})
-    checkpoint_loss_name = str(checkpoint_train_config.get("loss_name", "")).lower()
+    checkpoint_loss_name = str(checkpoint_train_config.get("loss_name", "unknown")).lower()
     top_k = min(top_k, dataset.num_stocks)
     top_values, top_indices = torch.topk(stock_weights, k=top_k)
     top_positions = [
@@ -484,10 +486,12 @@ def run_diagnostic_evaluation(
         paths=paths,
         source_csv_path=source_csv_path,
         allocation_group_top_n=resolved_diagnostic_config.allocation_group_top_n,
+        loss_name=checkpoint_loss_name,
     )
 
     prediction_payload = {
         "source_path": allocation_payload["source_path"],
+        "loss_name": checkpoint_loss_name,
         "diagnostic_only": diagnostic_only,
         "evaluation_split": "backtest",
         "device": str(device),
@@ -527,7 +531,7 @@ def run_diagnostic_evaluation(
         legacy_json_path.unlink()
     save_json(
         prediction_payload,
-        paths.predictions_dir / f"{state_id}_diagnostic_predictions.json",
+        paths.predictions_dir / f"{state_id}_{checkpoint_loss_name}_diagnostic_predictions.json",
     )
     save_json(metrics_payload, paths.metrics_dir / "evaluation_metrics.json")
     return prediction_payload

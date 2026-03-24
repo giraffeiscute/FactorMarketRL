@@ -144,8 +144,8 @@ class TrainConfig:
     # diagnostic 模式中每次分析使用的步數或樣本步長設定。
     diagnostic_steps: int = 1
 
-    # 訓練使用的 loss 名稱，例如 "return" 或 "sharpe"。
-    loss_name: str = "sharpe"
+    # 訓練使用的 loss 名稱，例如 "return", "sharpe", "dsr", "sortino", "mdd", "cvar"。
+    loss_name: str = "dsr"
 
     # 執行模式，通常為 "train" 或 "diagnostic"。
     mode: str = "train"
