@@ -1,22 +1,12 @@
-可以，下面我直接改成你要的格式：
+## 1. 整體流程總公式
 
-* 改成**第一章節**
-* 拿掉「其中：」「所以：」這類解釋句
-* 行內公式全部用 `$ $`
-* 單行公式全部用 `$$ $$`
-* 盡量用數學記號直接表達流程、維度、輸入輸出
-
-你可以直接貼進 Markdown。
-
----
-
-# 1. 整體流程總公式
-
-對單一 sample，觀察 $N$ 支股票，lookback 長度為 $L=60$，sample 長度為 $S=81$，建倉時點為 $\tau=61$，平倉時點為 $\xi=80$。
+對單一 sample，觀察 $N$ 支股票。其時間參數由該資料分段（Split）的總天數 $T$ 與分析區間 $H$（對應配置參數 analysis_horizon_days）動態決定：
 
 $$
-L=60,\qquad S=81,\qquad \tau=61,\qquad \xi=80
+L = T - H,\qquad \tau = L + 1,\qquad \xi = T
 $$
+
+其中 $L$ 為回看長度（lookback），$\tau$ 為建倉時點（entry），$\xi$ 為平倉時點（exit）。
 
 原始輸入張量：
 
@@ -34,6 +24,7 @@ $$
 $$
 F=\mathrm{Standardize}(F^{\mathrm{raw}})\in\mathbb{R}^{L\times 3}
 $$
+(X是個股資訊，F是市場資訊)
 
 ---
 
@@ -191,6 +182,7 @@ $$
 $$
 m=\mathrm{Pool}(U)\in\mathbb{R}^{d_m}
 $$
+
 
 ---
 
@@ -602,6 +594,3 @@ R_p=\sum_{i=1}^{N}w_iR_i,\qquad
 \mathcal{L}_{\mathrm{effective}}\approx -R_p
 $$
 
----
-
-如果你要，我下一版可以再幫你做一次「**完全論文風**」清稿，把符號命名、段落層級、矩陣排版再統一得更漂亮。
