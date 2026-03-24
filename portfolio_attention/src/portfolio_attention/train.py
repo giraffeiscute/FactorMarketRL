@@ -161,7 +161,13 @@ def _run_loss_step(
     portfolio_return = outputs["portfolio_return"]
     if portfolio_return is None:
         raise RuntimeError("Training batch must provide target returns.")
-    loss = build_loss(loss_name, portfolio_return)
+
+    # Path-based interpretation:
+    # Treat the current batch as a single continuous time-series path [1, T].
+    # portfolio_return has shape [Batch], we unsqueeze to [1, Batch].
+    path_returns = portfolio_return.unsqueeze(0)
+    loss = build_loss(loss_name, path_returns)
+
     return loss, portfolio_return
 
 
@@ -565,7 +571,19 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--mode", default=argparse.SUPPRESS, choices=["diagnostic", "train"])
     parser.add_argument("--data-path", type=Path, default=argparse.SUPPRESS)
     parser.add_argument("--device", default=argparse.SUPPRESS)
-    parser.add_argument("--loss", default=argparse.SUPPRESS, choices=["return", "sharpe"])
+    parser.add_argument(
+        "--loss",
+        default=argparse.SUPPRESS,
+        choices=[
+            "return",
+            "terminal_return",
+            "sharpe",
+            "dsr",
+            "sortino",
+            "mdd",
+            "cvar",
+        ],
+    )
     parser.add_argument("--diagnostic-steps", type=int, default=argparse.SUPPRESS)
     parser.add_argument("--seed", type=int, default=argparse.SUPPRESS)
     parser.add_argument("--num-stocks", type=int, default=argparse.SUPPRESS)

@@ -1,0 +1,21 @@
+Loaded feature columns successfully: stock=['characteristic_1', 'characteristic_2', 'characteristic_3', 'price'] market=['MKT', 'SMB', 'HML']
+Dataset split summary: total_num_days=200 train_split_ratio=0.8000 validation_split_ratio=0.1000 backtest_split_ratio=0.1000 train_split_length=160 validation_split_length=20 backtest_split_length=20 analysis_horizon_days=19 train_horizon_start_index=141 train_horizon_end_index=159 validation_horizon_start_index=161 validation_horizon_end_index=179 backtest_horizon_start_index=181 backtest_horizon_end_index=199 dynamic_train_lookback_length=141 dynamic_validation_lookback_length=161 dynamic_backtest_lookback_length=181 train_window_count=1 validation_window_count=1 backtest_window_count=1
+Running epoch-based train mode with train_windows=1 validation_windows=1 backtest_windows=1 batch_size=1 num_epochs=300.
+epoch=1 train_loss=0.13458240 train_portfolio_return=-0.13458240 val_loss=0.06697494 val_portfolio_return=-0.06697493
+epoch=2 train_loss=0.08519518 train_portfolio_return=-0.08519518 val_loss=0.04135579 val_portfolio_return=-0.04135577
+epoch=3 train_loss=0.04992110 train_portfolio_return=-0.04992108 val_loss=0.02982563 val_portfolio_return=-0.02982563
+epoch=4 train_loss=0.03609645 train_portfolio_return=-0.03609643 val_loss=0.01977324 val_portfolio_return=-0.01977324
+epoch=5 train_loss=0.02180851 train_portfolio_return=-0.02180849 val_loss=0.01710576 val_portfolio_return=-0.01710577
+epoch=6 train_loss=0.01311392 train_portfolio_return=-0.01311390 val_loss=0.03214544 val_portfolio_return=-0.03214541
+epoch=7 train_loss=0.02046025 train_portfolio_return=-0.02046024 val_loss=0.01514387 val_portfolio_return=-0.01514387
+epoch=8 train_loss=0.01229757 train_portfolio_return=-0.01229758 val_loss=0.01845759 val_portfolio_return=-0.01845757
+epoch=9 train_loss=0.02218127 train_portfolio_return=-0.02218128 val_loss=0.02219546 val_portfolio_return=-0.02219543
+epoch=10 train_loss=0.02756518 train_portfolio_return=-0.02756520 val_loss=0.02131802 val_portfolio_return=-0.02131801
+epoch=11 train_loss=0.02548808 train_portfolio_return=-0.02548810 val_loss=0.01848251 val_portfolio_return=-0.01848253
+epoch=12 train_loss=0.01970565 train_portfolio_return=-0.01970568 val_loss=0.01663536 val_portfolio_return=-0.01663534
+epoch=13 train_loss=0.01513094 train_portfolio_return=-0.01513093 val_loss=0.01634014 val_portfolio_return=-0.01634015
+epoch=14 train_loss=0.01345181 train_portfolio_return=-0.01345181 val_loss=0.01664627 val_portfolio_return=-0.01664628
+epoch=15 train_loss=0.01314771 train_portfolio_return=-0.01314772 val_loss=0.01717824 val_portfolio_return=-0.01717823
+epoch=16 train_loss=0.01344925 train_portfolio_return=-0.01344925 val_loss=0.01793325 val_portfolio_return=-0.01793328
+epoch=17 train_loss=0.01346385 train_portfolio_return=-0.01346384 val_loss=0.01866162 val_portfolio_return=-0.01866164
+epoch=18 train_loss=0.01198322 train_portfolio_return=-0.01198322 val_loss=0.01927310 val_portfolio_return=-0.01927310

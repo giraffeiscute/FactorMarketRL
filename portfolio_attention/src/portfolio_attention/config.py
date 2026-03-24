@@ -15,7 +15,7 @@ def repo_root() -> Path:
 
 
 def default_data_path() -> Path:
-    return repo_root() / "toy_ff_generator" / "outputs" / "neutral_4860_200_panel_long.csv"
+    return repo_root() / "toy_ff_generator" / "outputs" / "data v1" / "bear_4860_200_panel_long.csv"
 
 
 @dataclass
@@ -145,7 +145,7 @@ class TrainConfig:
     diagnostic_steps: int = 1
 
     # 訓練使用的 loss 名稱，例如 "return" 或 "sharpe"。
-    loss_name: str = "return"
+    loss_name: str = "sharpe"
 
     # 執行模式，通常為 "train" 或 "diagnostic"。
     mode: str = "train"

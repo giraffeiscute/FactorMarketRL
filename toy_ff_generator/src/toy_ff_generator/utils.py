@@ -84,7 +84,7 @@ def _format_panel_long_for_csv(panel_long_df: pd.DataFrame) -> pd.DataFrame:
     formatted_df = panel_long_df.copy()
     for column_name in PANEL_LONG_ROUNDED_COLUMNS:
         if column_name in formatted_df.columns:
-            formatted_df[column_name] = formatted_df[column_name].round(5)
+            formatted_df[column_name] = formatted_df[column_name].round(4)
     for column_name in PANEL_LONG_PERCENT_COLUMNS:
         if column_name in formatted_df.columns:
             formatted_df[column_name] = formatted_df[column_name].map(
