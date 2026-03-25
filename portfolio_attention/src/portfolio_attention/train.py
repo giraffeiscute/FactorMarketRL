@@ -4,13 +4,26 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import asdict, replace
+import json
+import os
 from pathlib import Path
+import subprocess
 import sys
+import time
 from typing import Any
 
 import torch
 from torch.utils.data import DataLoader
-from tqdm.auto import tqdm
+
+try:
+    from rich.live import Live
+    from rich.table import Table
+    from rich.progress import Progress, BarColumn, TextColumn, TimeElapsedColumn, SpinnerColumn
+    from rich.console import Console, Group
+    from rich.panel import Panel
+    HAS_RICH = True
+except ImportError:
+    HAS_RICH = False
 
 if __package__ is None or __package__ == "":
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -28,6 +41,8 @@ if __package__ is None or __package__ == "":
     from portfolio_attention.utils import (
         append_log,
         ensure_output_dirs,
+        format_determinism_status,
+        get_determinism_status,
         resolve_device,
         save_json,
         set_seed,
@@ -38,7 +53,15 @@ else:
     from .evaluate import run_diagnostic_evaluation
     from .losses import build_loss
     from .model import PortfolioAttentionModel
-    from .utils import append_log, ensure_output_dirs, resolve_device, save_json, set_seed
+    from .utils import (
+        append_log,
+        ensure_output_dirs,
+        format_determinism_status,
+        get_determinism_status,
+        resolve_device,
+        save_json,
+        set_seed,
+    )
 
 
 TERMINAL_SUMMARY_KEYS = [
@@ -69,11 +92,160 @@ def _serialize_config(config: object) -> dict:
     return serialized
 
 
+def _write_training_status(
+    paths: PathsConfig,
+    loss_name: str,
+    status: str,
+    **kwargs,
+) -> None:
+    """Writes current training status to a JSON file."""
+    status_path = _status_path_for_loss(paths, loss_name)
+    status_path.parent.mkdir(parents=True, exist_ok=True)
+
+    payload = {
+        "loss_name": loss_name,
+        "status": status,
+        "pid": os.getpid(),
+        "updated_at": time.time(),
+        **kwargs,
+    }
+    # Persistence of started_at
+    if status == "RUNNING" and "started_at" not in payload:
+        try:
+            with open(status_path, "r") as f:
+                old_payload = json.load(f)
+                if "started_at" in old_payload:
+                    payload["started_at"] = old_payload["started_at"]
+                else:
+                    payload["started_at"] = time.time()
+        except (FileNotFoundError, json.JSONDecodeError):
+            payload["started_at"] = time.time()
+    elif "started_at" not in payload and status in ("DONE", "FAILED"):
+        try:
+             with open(status_path, "r") as f:
+                old_payload = json.load(f)
+                if "started_at" in old_payload:
+                    payload["started_at"] = old_payload["started_at"]
+        except (FileNotFoundError, json.JSONDecodeError):
+             pass
+
+    with open(status_path, "w") as f:
+        json.dump(payload, f, indent=2)
+
+
+def _load_training_status(paths: PathsConfig, loss_name: str) -> dict[str, Any]:
+    """Loads training status from a JSON file."""
+    status_path = _status_path_for_loss(paths, loss_name)
+    if not status_path.exists():
+        return {"loss_name": loss_name, "status": "QUEUED"}
+    try:
+        with open(status_path, "r") as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return {"loss_name": loss_name, "status": "UNKNOWN"}
+
+
+def _status_path_for_loss(paths: PathsConfig, loss_name: str) -> Path:
+    return paths.status_dir / f"train_status_{loss_name}.json"
+
+
+def _read_metrics_for_loss(paths: PathsConfig, loss_name: str) -> dict[str, Any] | None:
+    """Reads final metrics JSON for a loss."""
+    metrics_path = paths.metrics_dir / f"train_metrics_{loss_name}.json"
+    if not metrics_path.exists():
+        return None
+    try:
+        with open(metrics_path, "r") as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def _render_multi_loss_dashboard(
+    paths: PathsConfig,
+    losses: list[str],
+    active_jobs: dict[str, dict[str, Any]],
+) -> Any:
+    """Renders a dashboard table using rich."""
+    if not HAS_RICH:
+        # Simple fallback
+        lines = ["\n" + "=" * 50]
+        for loss in losses:
+            status_data = _load_training_status(paths, loss)
+            status = status_data.get("status", "QUEUED")
+            epoch = status_data.get("epoch", 0)
+            total = status_data.get("num_epochs", "?")
+            train_loss = status_data.get("train_loss", 0.0)
+            val_loss = status_data.get("val_loss", 0.0)
+            lines.append(f"{loss:<10} | {status:<8} | Epoch: {epoch}/{total} | Train: {train_loss:.6f} | Val: {val_loss:.6f}")
+        return "\n".join(lines)
+
+    table = Table(title="Multi-Loss Portfolio Training Dashboard", show_header=True, header_style="bold magenta", expand=True)
+    table.add_column("Loss Name", style="cyan", no_wrap=True)
+    table.add_column("Status", style="bold")
+    table.add_column("Device/GPU", style="green")
+    table.add_column("Progress", style="white")
+    table.add_column("Epoch", justify="right")
+    table.add_column("Train Loss", justify="right")
+    table.add_column("Val Loss", justify="right")
+    table.add_column("Best Val", justify="right")
+
+    for loss in losses:
+        data = _load_training_status(paths, loss)
+        status = data.get("status", "QUEUED")
+        
+        # Color coding for status
+        status_display = status
+        if status == "RUNNING":
+            status_display = "[bold blue]RUNNING[/bold blue]"
+        elif status == "DONE":
+            status_display = "[bold green]DONE[/bold green]"
+        elif status == "FAILED":
+            status_display = "[bold red]FAILED[/bold red]"
+        elif status == "QUEUED":
+            status_display = "[dim]QUEUED[/dim]"
+
+        device = data.get("device", "-")
+        epoch = data.get("epoch", 0)
+        total_epochs = data.get("num_epochs", 0)
+        progress_ratio = data.get("progress_ratio", 0.0)
+        
+        # Progress bar string
+        bar_len = 10
+        filled = int(progress_ratio * bar_len)
+        prog_bar = "[" + "=" * filled + " " * (bar_len - filled) + "]"
+        prog_display = f"{prog_bar} {progress_ratio*100:>3.0f}%"
+
+        train_loss = data.get("train_loss", 0.0)
+        val_loss = data.get("val_loss", 0.0)
+        best_val = data.get("best_val_loss", 0.0)
+
+        table.add_row(
+            loss,
+            status_display,
+            str(device),
+            prog_display,
+            f"{epoch}/{total_epochs}",
+            f"{train_loss:.6f}",
+            f"{val_loss:.6f}",
+            f"{best_val:.6f}"
+        )
+
+    return table
+
+
 def _move_batch_to_device(batch: dict[str, Any], device: torch.device) -> dict[str, Any]:
     return {
         key: value.to(device) if isinstance(value, torch.Tensor) else value
         for key, value in batch.items()
     }
+
+
+def _log_reproducibility_status(log_path: Path, train_config: TrainConfig, device: torch.device) -> None:
+    status = get_determinism_status(device=device, seed=train_config.seed)
+    message = format_determinism_status(status)
+    print(message, flush=True)
+    append_log(log_path, message)
 
 
 def _build_terminal_summary(payload: dict[str, Any]) -> dict[str, Any]:
@@ -230,6 +402,8 @@ def run_diagnostic_training(
     set_seed(train_config.seed)
     ensure_output_dirs(paths)
     device = resolve_device(train_config.device)
+    log_path = paths.logs_dir / f"train_{train_config.loss_name}.log"
+    _log_reproducibility_status(log_path, train_config, device)
 
     dataset = PortfolioPanelDataset(data_config)
     model = PortfolioAttentionModel(
@@ -256,7 +430,6 @@ def run_diagnostic_training(
         "selected_num_stocks": dataset.metadata.selected_num_stocks,
     }
 
-    log_path = paths.logs_dir / f"train_{train_config.loss_name}.log"
     append_log(
         log_path,
         (
@@ -326,6 +499,8 @@ def run_epoch_training(
     set_seed(train_config.seed)
     ensure_output_dirs(paths)
     device = resolve_device(train_config.device)
+    log_path = paths.logs_dir / f"train_{train_config.loss_name}.log"
+    _log_reproducibility_status(log_path, train_config, device)
 
     dataset = PortfolioPanelDataset(data_config)
     train_dataset, validation_dataset, backtest_dataset = dataset.build_train_validation_backtest_datasets()
@@ -333,8 +508,6 @@ def run_epoch_training(
         raise RuntimeError(
             "Train mode requires exactly one train sample, one validation sample, and one backtest sample."
         )
-    if train_config.epoch_print_interval <= 0:
-        raise ValueError("TrainConfig.epoch_print_interval must be positive.")
 
     model = PortfolioAttentionModel(
         model_config,
@@ -361,7 +534,6 @@ def run_epoch_training(
         shuffle=False,
     )
 
-    log_path = paths.logs_dir / f"train_{train_config.loss_name}.log"
     append_log(
         log_path,
         (
@@ -388,12 +560,19 @@ def run_epoch_training(
     best_checkpoint_path = paths.checkpoints_dir / train_config.train_best_checkpoint_name
     last_checkpoint_path = paths.checkpoints_dir / train_config.train_last_checkpoint_name
 
-    with tqdm(
-        range(1, train_config.num_epochs + 1),
-        total=train_config.num_epochs,
-        desc=f"Epoch 0/{train_config.num_epochs}",
-    ) as epoch_bar:
-        for epoch in epoch_bar:
+    # Initial status update
+    _write_training_status(
+        paths,
+        train_config.loss_name,
+        "RUNNING",
+        device=str(device),
+        epoch=0,
+        num_epochs=train_config.num_epochs,
+        progress_ratio=0.0,
+    )
+
+    try:
+        for epoch in range(1, train_config.num_epochs + 1):
             model.train()
             total_train_loss = 0.0
             total_train_return = 0.0
@@ -428,14 +607,6 @@ def run_epoch_training(
             }
             epochs_completed = epoch
             best_checkpoint_updated = False
-
-            epoch_bar.set_description(f"Epoch {epoch}/{train_config.num_epochs}")
-            epoch_bar.set_postfix(
-                train_loss=f"{epoch_metrics['train_loss']:.6f}",
-                train_ret=f"{epoch_metrics['train_portfolio_return']:.6f}",
-                val_loss=f"{epoch_metrics['val_loss']:.6f}",
-                val_ret=f"{epoch_metrics['val_portfolio_return']:.6f}",
-            )
 
             append_log(
                 log_path,
@@ -472,7 +643,6 @@ def run_epoch_training(
             else:
                 epochs_without_improvement += 1
 
-
             torch.save(
                 _build_checkpoint_payload(
                     model=model,
@@ -492,18 +662,25 @@ def run_epoch_training(
                 last_checkpoint_path,
             )
 
-            should_stop_early = epochs_without_improvement >= train_config.early_stopping_patience
-            if epoch % train_config.epoch_print_interval == 0 or epoch == train_config.num_epochs or should_stop_early:
-                tqdm.write(
-                    (
-                        f"[Epoch {epoch}/{train_config.num_epochs}] "
-                        f"train_loss={epoch_metrics['train_loss']:.6f} "
-                        f"train_portfolio_return={epoch_metrics['train_portfolio_return']:.6f} "
-                        f"val_loss={epoch_metrics['val_loss']:.6f} "
-                        f"val_portfolio_return={epoch_metrics['val_portfolio_return']:.6f}"
-                    )
-                )
+            # Update status JSON after each epoch
+            _write_training_status(
+                paths,
+                train_config.loss_name,
+                "RUNNING",
+                device=str(device),
+                epoch=epoch,
+                num_epochs=train_config.num_epochs,
+                progress_ratio=epoch / train_config.num_epochs,
+                train_loss=train_loss,
+                train_portfolio_return=train_return,
+                val_loss=val_loss,
+                val_portfolio_return=val_return,
+                best_epoch=best_epoch,
+                best_val_loss=best_val_loss,
+                epochs_without_improvement=epochs_without_improvement,
+            )
 
+            should_stop_early = epochs_without_improvement >= train_config.early_stopping_patience
             if should_stop_early:
                 append_log(
                     log_path,
@@ -513,6 +690,14 @@ def run_epoch_training(
                     ),
                 )
                 break
+    except Exception as e:
+        _write_training_status(
+            paths,
+            train_config.loss_name,
+            "FAILED",
+            error_message=str(e),
+        )
+        raise e
 
     if best_epoch == 0:
         raise RuntimeError("Train loop did not record a best checkpoint.")
@@ -552,6 +737,21 @@ def run_epoch_training(
         "metadata": dataset.metadata.as_dict(),
     }
     save_json(metrics, paths.metrics_dir / f"train_metrics_{train_config.loss_name}.json")
+
+    # Success status update
+    _write_training_status(
+        paths,
+        train_config.loss_name,
+        "DONE",
+        device=str(device),
+        epoch=epochs_completed,
+        num_epochs=train_config.num_epochs,
+        progress_ratio=1.0,
+        best_epoch=best_epoch,
+        best_val_loss=best_val_loss,
+        stopped_early=epochs_completed < train_config.num_epochs,
+    )
+
     return metrics
 
 
@@ -587,12 +787,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "cvar",
         ],
     )
+    parser.add_argument("--losses", type=str, default=argparse.SUPPRESS)
+    parser.add_argument("--parallel", type=int, default=1)
     parser.add_argument("--diagnostic-steps", type=int, default=argparse.SUPPRESS)
     parser.add_argument("--seed", type=int, default=argparse.SUPPRESS)
     parser.add_argument("--num-stocks", type=int, default=argparse.SUPPRESS)
     parser.add_argument("--batch-size", type=int, default=argparse.SUPPRESS)
     parser.add_argument("--num-epochs", type=int, default=argparse.SUPPRESS)
-    parser.add_argument("--epoch-log-interval", type=int, default=argparse.SUPPRESS)
     parser.add_argument("--weight-decay", type=float, default=argparse.SUPPRESS)
     parser.add_argument("--grad-clip-norm", type=float, default=argparse.SUPPRESS)
     parser.add_argument(
@@ -636,10 +837,9 @@ def resolve_runtime_configs_from_args(
         train_overrides["batch_size"] = args_dict["batch_size"]
     if "num_epochs" in args_dict:
         train_overrides["num_epochs"] = args_dict["num_epochs"]
-    if "epoch_print_interval" in args_dict:
-        train_overrides["epoch_print_interval"] = args_dict["epoch_print_interval"]
     if "weight_decay" in args_dict:
         train_overrides["weight_decay"] = args_dict["weight_decay"]
+
     if "grad_clip_norm" in args_dict:
         train_overrides["grad_clip_norm"] = args_dict["grad_clip_norm"]
     if "early_stopping_patience" in args_dict:
@@ -653,27 +853,214 @@ def resolve_runtime_configs_from_args(
 DEFAULT_LOSSES = ["return", "sharpe", "dsr", "sortino", "mdd", "cvar"]
 
 
-def main() -> None:
-    args = build_arg_parser().parse_args()
-    paths = PathsConfig()
+def _normalize_losses(raw_losses: list[str]) -> list[str]:
+    valid_losses = {"return", "sharpe", "dsr", "sortino", "mdd", "cvar"}
+    result = []
+    seen = set()
+    for loss in raw_losses:
+        loss = loss.strip()
+        if not loss:
+            continue
+        if loss == "terminal_return":
+            loss = "return"
+        if loss not in valid_losses:
+            raise ValueError(f"Invalid loss: '{loss}'. Must be one of {valid_losses} or 'terminal_return'")
+        if loss not in seen:
+            seen.add(loss)
+            result.append(loss)
+    return result
 
+
+def _parse_losses_args(args: argparse.Namespace) -> list[str]:
     args_dict = vars(args)
     if "loss" in args_dict:
-        requested_loss = args_dict["loss"]
-        if requested_loss == "terminal_return":
-            requested_loss = "return"
-        losses_to_run = [requested_loss]
-    else:
-        losses_to_run = DEFAULT_LOSSES
+        return _normalize_losses([args_dict["loss"]])
+    if "losses" in args_dict:
+        val = args_dict["losses"]
+        if not val or not val.strip():
+            raise ValueError("--losses cannot be empty string")
+        return _normalize_losses(val.split(","))
+    return list(DEFAULT_LOSSES)
 
-    for loss in losses_to_run:
+
+def _resolve_round_robin_gpu_ids(parallel: int) -> list[int]:
+    if parallel <= 0:
+        raise ValueError("parallel must be positive")
+    if not torch.cuda.is_available():
+        return []
+    gpu_count = torch.cuda.device_count()
+    if gpu_count <= 0:
+        return []
+    return list(range(min(4, gpu_count)))
+
+
+def _build_subprocess_cmd(loss: str, device: str | None = None) -> list[str]:
+    cmd = [sys.executable, os.path.abspath(__file__)]
+    skip_next = False
+    for arg in sys.argv[1:]:
+        if skip_next:
+            skip_next = False
+            continue
+        if arg.startswith("--losses=") or arg.startswith("--parallel="):
+            continue
+        if arg in ("--losses", "--parallel"):
+            skip_next = True
+            continue
+        if arg.startswith("--loss="):
+            continue
+        if arg == "--loss":
+            skip_next = True
+            continue
+        if arg.startswith("--device="):
+            continue
+        if arg == "--device":
+            skip_next = True
+            continue
+        cmd.append(arg)
+    cmd.extend(["--loss", loss])
+    if device is not None:
+        cmd.extend(["--device", device])
+    return cmd
+
+
+def _is_worker_mode() -> bool:
+    return os.environ.get("PORTFOLIO_ATTENTION_CHILD") == "1"
+
+
+def main() -> None:
+    args = build_arg_parser().parse_args()
+    args_dict = vars(args)
+    paths = PathsConfig()
+
+    parallel = args_dict.get("parallel", 1)
+    if parallel < 1:
+        raise ValueError("--parallel must be >= 1")
+
+    losses_to_run = _parse_losses_args(args)
+    worker_mode = _is_worker_mode()
+
+    if "loss" in args_dict:
+        # Run single loss directly in the current process
+        loss = losses_to_run[0]
         args.loss = loss
         data_config, train_config = resolve_runtime_configs_from_args(args)
-        print(f"\n>>> Running training with loss: {loss}")
-        metrics = run_training(data_config, ModelConfig(), train_config, paths)
-        print(f"--- Results for loss: {loss} ---")
-        print(_format_terminal_summary(metrics))
+        
+        if not worker_mode:
+            print(f"\n>>> Running training with loss: {loss}")
+        
+        try:
+            metrics = run_training(data_config, ModelConfig(), train_config, paths)
+            if not worker_mode:
+                print(f"--- Results for loss: {loss} ---")
+                print(_format_terminal_summary(metrics))
+        except Exception:
+            if worker_mode:
+                # Child process should re-raise to exit with non-zero
+                raise
+            else:
+                print(f"ERROR: Training for loss '{loss}' failed.")
+                sys.exit(1)
+        return
+
+    # Multi loss mode (spawn subprocesses)
+    gpu_ids = _resolve_round_robin_gpu_ids(parallel)
+    
+    # Clean up old status files before starting
+    if paths.status_dir.exists():
+        for f in paths.status_dir.glob("train_status_*.json"):
+            try:
+                f.unlink()
+            except OSError:
+                pass
+
+    active_processes: list[tuple[str, int | None, subprocess.Popen]] = []
+    pending_losses = list(losses_to_run)
+    failed_losses: list[str] = []
+    launch_index = 0
+
+    dashboard_context = Live(_render_multi_loss_dashboard(paths, losses_to_run, {}), refresh_per_second=2) if HAS_RICH else None
+    if dashboard_context:
+        dashboard_context.start()
+
+    try:
+        while pending_losses or active_processes:
+            # Start new processes if we have capacity
+            while pending_losses and len(active_processes) < parallel:
+                loss = pending_losses.pop(0)
+                child_env = os.environ.copy()
+                child_env["PORTFOLIO_ATTENTION_CHILD"] = "1"
+                
+                stdout_path = paths.logs_dir / f"train_{loss}.stdout.log"
+                stderr_path = paths.logs_dir / f"train_{loss}.stderr.log"
+                stdout_file = open(stdout_path, "w")
+                stderr_file = open(stderr_path, "w")
+
+                if gpu_ids:
+                    physical_gpu_id = gpu_ids[launch_index % len(gpu_ids)]
+                    child_env["CUDA_VISIBLE_DEVICES"] = str(physical_gpu_id)
+                    cmd = _build_subprocess_cmd(loss, device="cuda:0")
+                    p = subprocess.Popen(cmd, env=child_env, stdout=stdout_file, stderr=stderr_file)
+                else:
+                    physical_gpu_id = None
+                    cmd = _build_subprocess_cmd(loss, device="cpu")
+                    p = subprocess.Popen(cmd, env=child_env, stdout=stdout_file, stderr=stderr_file)
+
+                # Store file handles to close later
+                active_processes.append((loss, physical_gpu_id, p, stdout_file, stderr_file))
+                launch_index += 1
+
+            # Check active processes
+            still_active = []
+            for loss, physical_gpu_id, p, out_f, err_f in active_processes:
+                retcode = p.poll()
+                if retcode is None:
+                    still_active.append((loss, physical_gpu_id, p, out_f, err_f))
+                else:
+                    out_f.close()
+                    err_f.close()
+                    if retcode != 0:
+                        failed_losses.append(loss)
+            
+            active_processes = still_active
+            
+            # Update Dashboard
+            if dashboard_context:
+                dashboard_context.update(_render_multi_loss_dashboard(paths, losses_to_run, {}))
+            elif not HAS_RICH:
+                # Simple fallback printing
+                print(_render_multi_loss_dashboard(paths, losses_to_run, {}), end="\r")
+
+            if active_processes:
+                time.sleep(0.5)
+    finally:
+        if dashboard_context:
+            dashboard_context.stop()
+
+    # Final Summaries
+    print("\n" + "=" * 50)
+    print("FINAL TRAINING SUMMARIES")
+    print("=" * 50)
+    
+    for loss in losses_to_run:
+        metrics = _read_metrics_for_loss(paths, loss)
+        if metrics:
+            print(f"\n--- Results for loss: {loss} ---")
+            print(_format_terminal_summary(metrics))
+        else:
+            status_data = _load_training_status(paths, loss)
+            err_msg = status_data.get("error_message", "Unknown error")
+            print(f"\n--- Results for loss: {loss} ---")
+            print(f"STATUS: FAILED")
+            print(f"ERROR: {err_msg}")
+            print(f"Check logs: {paths.logs_dir}/train_{loss}.stderr.log")
+
+    if failed_losses:
+        print(f"\nTraining completed with failures in: {', '.join(failed_losses)}")
+        sys.exit(1)
+    else:
+        print("\nAll training processes completed successfully.")
 
 
 if __name__ == "__main__":
     main()
+

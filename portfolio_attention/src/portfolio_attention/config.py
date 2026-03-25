@@ -44,6 +44,10 @@ class PathsConfig:
     def predictions_dir(self) -> Path:
         return self.outputs_dir / "predictions"
 
+    @property
+    def status_dir(self) -> Path:
+        return self.outputs_dir / "status"
+
     def get_scenario_predictions_dir(self, state_id: str) -> Path:
         """依據 state_id (格式 {S}_{N}_{T}) 的前綴 S 取得對應的 predictions 子目錄。"""
         scenario = state_id.split("_")[0]
@@ -105,7 +109,7 @@ class ModelConfig:
     stock_id_embedding_dim: int = 64
 
     # attention 機制使用的 head 數量。
-    attention_heads: int = 4
+    attention_heads: int = 8
 
     # dropout 比例，用來降低 overfitting 風險。
     dropout: float = 0.0
@@ -130,9 +134,6 @@ class TrainConfig:
 
     # 最大訓練 epoch 數量。
     num_epochs: int = 300
-
-    # 每隔多少個 epoch 印出一次訓練紀錄。
-    epoch_print_interval: int = 20
 
     # 權重衰減係數，用於 regularization。
     weight_decay: float = 1e-5
