@@ -7,6 +7,7 @@ from dataclasses import asdict, replace
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import time
@@ -65,6 +66,7 @@ else:
 
 
 TERMINAL_SUMMARY_KEYS = [
+    "seed",
     "portfolio_return",
     "cash_weight",
     "stopped_early",
@@ -269,7 +271,7 @@ def _build_terminal_summary(payload: dict[str, Any]) -> dict[str, Any]:
             for key in TERMINAL_METADATA_KEYS:
                 if key in metadata:
                     summary[key] = metadata[key]
-    for key in ("stopped_early", "best_epoch", "best_val_loss"):
+    for key in ("seed", "stopped_early", "best_epoch", "best_val_loss"):
         if key in payload:
             summary[key] = payload[key]
     return summary
@@ -365,6 +367,50 @@ def _build_checkpoint_payload(
     if extra_metrics:
         payload["metrics"] = extra_metrics
     return payload
+
+
+def _normalize_best_epoch_selection_window(select_best_from_last_x_epochs: int) -> int:
+    """Normalizes the trailing best-epoch selection window.
+
+    The best epoch is selected only from the last X completed epochs.
+    X=1 means only the final completed epoch is eligible. When X is larger
+    than the number of completed epochs, all completed epochs remain eligible.
+    Non-positive values are normalized to 1 to avoid falling back to a
+    global-best-over-all-epochs selection rule.
+    """
+    return max(1, int(select_best_from_last_x_epochs))
+
+
+def _epoch_candidate_checkpoint_path(paths: PathsConfig, loss_name: str, epoch: int) -> Path:
+    return paths.checkpoints_dir / f"train_candidate_{loss_name}_epoch_{epoch}.pt"
+
+
+def _select_best_epoch_record(
+    epoch_records: list[dict[str, Any]],
+    select_best_from_last_x_epochs: int,
+) -> dict[str, Any]:
+    if not epoch_records:
+        raise RuntimeError("No epoch records were collected for best-epoch selection.")
+
+    normalized_window = _normalize_best_epoch_selection_window(select_best_from_last_x_epochs)
+    candidate_records = epoch_records[-normalized_window:]
+    return min(candidate_records, key=lambda record: (float(record["val_loss"]), int(record["epoch"])))
+
+
+def _cleanup_temp_epoch_checkpoints(epoch_records: list[dict[str, Any]]) -> None:
+    seen_paths: set[Path] = set()
+    for record in epoch_records:
+        checkpoint_path = record.get("checkpoint_path")
+        if checkpoint_path is None:
+            continue
+        path = Path(str(checkpoint_path))
+        if path in seen_paths:
+            continue
+        seen_paths.add(path)
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
 
 
 @torch.no_grad()
@@ -543,22 +589,28 @@ def run_epoch_training(
         ),
     )
     _append_dataset_split_summary(log_path, dataset)
+
+    selection_window = _normalize_best_epoch_selection_window(
+        train_config.select_best_from_last_x_epochs
+    )
     append_log(
         log_path,
         (
             "Running epoch-based train mode with "
             f"train_windows={len(train_dataset)} validation_windows={len(validation_dataset)} "
             f"backtest_windows={len(backtest_dataset)} "
-            f"batch_size={train_config.batch_size} num_epochs={train_config.num_epochs}."
+            f"batch_size={train_config.batch_size} num_epochs={train_config.num_epochs} "
+            f"select_best_from_last_x_epochs={train_config.select_best_from_last_x_epochs} "
+            f"normalized_best_epoch_selection_window={selection_window}."
         ),
     )
 
-    best_val_loss = float("inf")
-    best_epoch = 0
+    global_best_val_loss = float("inf")
     epochs_without_improvement = 0
     epochs_completed = 0
     best_checkpoint_path = paths.checkpoints_dir / train_config.train_best_checkpoint_name
     last_checkpoint_path = paths.checkpoints_dir / train_config.train_last_checkpoint_name
+    epoch_selection_records: list[dict[str, Any]] = []
 
     # Initial status update
     _write_training_status(
@@ -598,7 +650,7 @@ def run_epoch_training(
             train_return = total_train_return / total_train_samples
             val_loss, val_return = _evaluate_epoch(model, validation_loader, device, train_config.loss_name)
 
-            epoch_metrics: dict[str, float | int] = {
+            epoch_metrics: dict[str, float | int | bool] = {
                 "epoch": epoch,
                 "train_loss": train_loss,
                 "train_portfolio_return": train_return,
@@ -606,7 +658,7 @@ def run_epoch_training(
                 "val_portfolio_return": val_return,
             }
             epochs_completed = epoch
-            best_checkpoint_updated = False
+            global_best_checkpoint_updated = False
 
             append_log(
                 log_path,
@@ -617,31 +669,54 @@ def run_epoch_training(
                 ),
             )
 
-            if val_loss < best_val_loss:
-                best_val_loss = val_loss
-                best_epoch = epoch
+            if val_loss < global_best_val_loss:
+                global_best_val_loss = val_loss
                 epochs_without_improvement = 0
-                best_checkpoint_updated = True
-                torch.save(
-                    _build_checkpoint_payload(
-                        model=model,
-                        optimizer=optimizer,
-                        model_config=model_config,
-                        data_config=data_config,
-                        train_config=train_config,
-                        dataset=dataset,
-                        epoch=epoch,
-                        best_val_loss=best_val_loss,
-                        extra_metrics={
-                            **epoch_metrics,
-                            "best_checkpoint_updated": best_checkpoint_updated,
-                            "epochs_without_improvement": epochs_without_improvement,
-                        },
-                    ),
-                    best_checkpoint_path,
-                )
+                global_best_checkpoint_updated = True
             else:
                 epochs_without_improvement += 1
+
+            candidate_checkpoint_path = _epoch_candidate_checkpoint_path(paths, train_config.loss_name, epoch)
+            torch.save(
+                _build_checkpoint_payload(
+                    model=model,
+                    optimizer=optimizer,
+                    model_config=model_config,
+                    data_config=data_config,
+                    train_config=train_config,
+                    dataset=dataset,
+                    epoch=epoch,
+                    best_val_loss=val_loss,
+                    extra_metrics={
+                        **epoch_metrics,
+                        "global_best_checkpoint_updated": global_best_checkpoint_updated,
+                        "epochs_without_improvement": epochs_without_improvement,
+                    },
+                ),
+                candidate_checkpoint_path,
+            )
+            epoch_selection_records.append(
+                {
+                    "epoch": epoch,
+                    "val_loss": val_loss,
+                    "checkpoint_path": str(candidate_checkpoint_path),
+                }
+            )
+
+            if len(epoch_selection_records) > selection_window:
+                stale_record = epoch_selection_records.pop(0)
+                stale_checkpoint_path = Path(str(stale_record["checkpoint_path"]))
+                try:
+                    stale_checkpoint_path.unlink()
+                except FileNotFoundError:
+                    pass
+
+            current_window_best_record = _select_best_epoch_record(
+                epoch_selection_records,
+                selection_window,
+            )
+            current_window_best_epoch = int(current_window_best_record["epoch"])
+            current_window_best_val_loss = float(current_window_best_record["val_loss"])
 
             torch.save(
                 _build_checkpoint_payload(
@@ -652,17 +727,19 @@ def run_epoch_training(
                     train_config=train_config,
                     dataset=dataset,
                     epoch=epoch,
-                    best_val_loss=best_val_loss,
+                    best_val_loss=current_window_best_val_loss,
                     extra_metrics={
                         **epoch_metrics,
-                        "best_checkpoint_updated": best_checkpoint_updated,
+                        "current_window_best_epoch": current_window_best_epoch,
+                        "current_window_best_val_loss": current_window_best_val_loss,
+                        "global_best_val_loss": global_best_val_loss,
+                        "global_best_checkpoint_updated": global_best_checkpoint_updated,
                         "epochs_without_improvement": epochs_without_improvement,
                     },
                 ),
                 last_checkpoint_path,
             )
 
-            # Update status JSON after each epoch
             _write_training_status(
                 paths,
                 train_config.loss_name,
@@ -675,9 +752,11 @@ def run_epoch_training(
                 train_portfolio_return=train_return,
                 val_loss=val_loss,
                 val_portfolio_return=val_return,
-                best_epoch=best_epoch,
-                best_val_loss=best_val_loss,
+                best_epoch=current_window_best_epoch,
+                best_val_loss=current_window_best_val_loss,
+                global_best_val_loss=global_best_val_loss,
                 epochs_without_improvement=epochs_without_improvement,
+                select_best_from_last_x_epochs=selection_window,
             )
 
             should_stop_early = epochs_without_improvement >= train_config.early_stopping_patience
@@ -699,8 +778,32 @@ def run_epoch_training(
         )
         raise e
 
-    if best_epoch == 0:
-        raise RuntimeError("Train loop did not record a best checkpoint.")
+    if not epoch_selection_records:
+        raise RuntimeError("Train loop did not record any epoch candidates for best selection.")
+
+    selected_best_record = _select_best_epoch_record(
+        epoch_selection_records,
+        selection_window,
+    )
+    best_epoch = int(selected_best_record["epoch"])
+    best_val_loss = float(selected_best_record["val_loss"])
+    selected_best_checkpoint_path = Path(str(selected_best_record["checkpoint_path"]))
+    effective_selection_window = min(selection_window, epochs_completed)
+
+    append_log(
+        log_path,
+        (
+            "Selecting final best checkpoint from trailing validation window: "
+            f"configured_window={train_config.select_best_from_last_x_epochs} "
+            f"normalized_window={selection_window} "
+            f"effective_window={effective_selection_window} "
+            f"selected_best_epoch={best_epoch} "
+            f"selected_best_val_loss={best_val_loss:.8f}."
+        ),
+    )
+
+    shutil.copy2(selected_best_checkpoint_path, best_checkpoint_path)
+    _cleanup_temp_epoch_checkpoints(epoch_selection_records)
 
     append_log(log_path, f"Loading best checkpoint for final backtest evaluation: {best_checkpoint_path}.")
     final_backtest = run_diagnostic_evaluation(
@@ -721,11 +824,15 @@ def run_epoch_training(
             "market": dataset.loaded_market_feature_columns,
         },
         "loss_name": train_config.loss_name,
+        "seed": train_config.seed,
         "batch_size": train_config.batch_size,
         "num_epochs_requested": train_config.num_epochs,
         "epochs_completed": epochs_completed,
         "best_epoch": best_epoch,
         "best_val_loss": best_val_loss,
+        "select_best_from_last_x_epochs": train_config.select_best_from_last_x_epochs,
+        "normalized_best_epoch_selection_window": selection_window,
+        "effective_best_epoch_selection_window": effective_selection_window,
         "train_window_count": len(train_dataset),
         "validation_window_count": len(validation_dataset),
         "backtest_window_count": len(backtest_dataset),
@@ -738,7 +845,6 @@ def run_epoch_training(
     }
     save_json(metrics, paths.metrics_dir / f"train_metrics_{train_config.loss_name}.json")
 
-    # Success status update
     _write_training_status(
         paths,
         train_config.loss_name,
@@ -750,6 +856,7 @@ def run_epoch_training(
         best_epoch=best_epoch,
         best_val_loss=best_val_loss,
         stopped_early=epochs_completed < train_config.num_epochs,
+        select_best_from_last_x_epochs=selection_window,
     )
 
     return metrics
@@ -801,6 +908,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         type=int,
         default=argparse.SUPPRESS,
     )
+    parser.add_argument(
+        "--select-best-from-last-x-epochs",
+        type=int,
+        default=argparse.SUPPRESS,
+    )
     return parser
 
 
@@ -844,6 +956,8 @@ def resolve_runtime_configs_from_args(
         train_overrides["grad_clip_norm"] = args_dict["grad_clip_norm"]
     if "early_stopping_patience" in args_dict:
         train_overrides["early_stopping_patience"] = args_dict["early_stopping_patience"]
+    if "select_best_from_last_x_epochs" in args_dict:
+        train_overrides["select_best_from_last_x_epochs"] = args_dict["select_best_from_last_x_epochs"]
     if train_overrides:
         resolved_train_config = replace(resolved_train_config, **train_overrides)
 

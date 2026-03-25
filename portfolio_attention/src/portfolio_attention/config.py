@@ -136,13 +136,21 @@ class TrainConfig:
     num_epochs: int = 300
 
     # 權重衰減係數，用於 regularization。
-    weight_decay: float = 1e-5
+    weight_decay: float = 1e-4
 
     # gradient clipping 的最大 norm，避免梯度爆炸。
     grad_clip_norm: float = 1.0
 
     # early stopping 容忍幾個 epoch 沒進步後停止訓練。
     early_stopping_patience: int = 100
+
+    # 挑選 best epoch 時，只從 validation set 最後 X 個已完成 epoch 中選最佳。
+    #
+    # 規則說明：
+    # - X=1：等價於只看最後 1 個 epoch。
+    # - X>已完成 epoch 數：自動退化為在目前所有已完成 epoch 中選最佳。
+    # - 非正整數：為了避免無效設定，執行時會自動視為 1。
+    select_best_from_last_x_epochs: int = 50
 
     # diagnostic 模式中每次分析使用的步數或樣本步長設定。
     diagnostic_steps: int = 1
