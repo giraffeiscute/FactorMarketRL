@@ -63,10 +63,10 @@ def test_cpu_only_smoke_train_and_evaluate(tmp_path: Path) -> None:
     assert metrics["diagnostic_only"] is True
     assert evaluation["diagnostic_only"] is True
     assert (paths.checkpoints_dir / train_config.checkpoint_name).exists()
-    assert (paths.metrics_dir / "diagnostic_metrics.json").exists()
+    assert (paths.metrics_dir / f"diagnostic_metrics_{train_config.loss_name}.json").exists()
     state_id = "mini_8_81"
-    prediction_json = paths.predictions_dir / f"{state_id}_dsr_diagnostic_predictions.json"
-    metrics_json = paths.metrics_dir / "evaluation_metrics.json"
+    prediction_json = paths.get_scenario_predictions_dir(state_id) / f"{state_id}_dsr_diagnostic_predictions.json"
+    metrics_json = paths.metrics_dir / "evaluation_metrics_dsr.json"
     assert prediction_json.exists()
     assert metrics_json.exists()
     exported = json.loads(prediction_json.read_text(encoding="utf-8"))
@@ -99,8 +99,8 @@ def test_cpu_only_smoke_train_and_evaluate(tmp_path: Path) -> None:
     assert len(metrics_exported["allocation_groups_top_n_plus_others"]) >= 1
     assert Path(metrics_exported["allocation_pie_chart"]).exists()
     assert Path(metrics_exported["allocation_bar_chart"]).exists()
-    assert Path(metrics_exported["allocation_pie_chart"]).parent == paths.outputs_dir
-    assert Path(metrics_exported["allocation_bar_chart"]).parent == paths.outputs_dir
+    assert Path(metrics_exported["allocation_pie_chart"]).parent == paths.get_scenario_predictions_dir(state_id)
+    assert Path(metrics_exported["allocation_bar_chart"]).parent == paths.get_scenario_predictions_dir(state_id)
     assert Path(metrics_exported["all_stock_weights_csv"]).exists()
     first_stock = evaluation["top_k_stock_weights"][0]["stock_id"]
     stock_idx = int(str(first_stock).split("_")[1])
@@ -144,7 +144,7 @@ def test_epoch_train_mode_saves_best_and_last_checkpoints(tmp_path: Path) -> Non
     assert metrics["best_epoch"] <= metrics["epochs_completed"]
     assert (paths.checkpoints_dir / train_config.train_best_checkpoint_name).exists()
     assert (paths.checkpoints_dir / train_config.train_last_checkpoint_name).exists()
-    assert (paths.metrics_dir / "train_metrics.json").exists()
+    assert (paths.metrics_dir / f"train_metrics_{train_config.loss_name}.json").exists()
 
     best_checkpoint = torch.load(
         paths.checkpoints_dir / train_config.train_best_checkpoint_name,

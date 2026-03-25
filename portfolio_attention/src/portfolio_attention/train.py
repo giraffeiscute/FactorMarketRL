@@ -256,7 +256,7 @@ def run_diagnostic_training(
         "selected_num_stocks": dataset.metadata.selected_num_stocks,
     }
 
-    log_path = paths.logs_dir / "train.log"
+    log_path = paths.logs_dir / f"train_{train_config.loss_name}.log"
     append_log(
         log_path,
         (
@@ -313,7 +313,7 @@ def run_diagnostic_training(
             "metadata": dataset.metadata.as_dict(),
         }
     )
-    save_json(metrics, paths.metrics_dir / "diagnostic_metrics.json")
+    save_json(metrics, paths.metrics_dir / f"diagnostic_metrics_{train_config.loss_name}.json")
     return metrics
 
 
@@ -361,7 +361,7 @@ def run_epoch_training(
         shuffle=False,
     )
 
-    log_path = paths.logs_dir / "train.log"
+    log_path = paths.logs_dir / f"train_{train_config.loss_name}.log"
     append_log(
         log_path,
         (
@@ -551,7 +551,7 @@ def run_epoch_training(
         "final_backtest": final_backtest,
         "metadata": dataset.metadata.as_dict(),
     }
-    save_json(metrics, paths.metrics_dir / "train_metrics.json")
+    save_json(metrics, paths.metrics_dir / f"train_metrics_{train_config.loss_name}.json")
     return metrics
 
 
@@ -650,12 +650,29 @@ def resolve_runtime_configs_from_args(
     return resolved_data_config, resolved_train_config
 
 
+DEFAULT_LOSSES = ["return", "sharpe", "dsr", "sortino", "mdd", "cvar"]
+
+
 def main() -> None:
     args = build_arg_parser().parse_args()
     paths = PathsConfig()
-    data_config, train_config = resolve_runtime_configs_from_args(args)
-    metrics = run_training(data_config, ModelConfig(), train_config, paths)
-    print(_format_terminal_summary(metrics))
+
+    args_dict = vars(args)
+    if "loss" in args_dict:
+        requested_loss = args_dict["loss"]
+        if requested_loss == "terminal_return":
+            requested_loss = "return"
+        losses_to_run = [requested_loss]
+    else:
+        losses_to_run = DEFAULT_LOSSES
+
+    for loss in losses_to_run:
+        args.loss = loss
+        data_config, train_config = resolve_runtime_configs_from_args(args)
+        print(f"\n>>> Running training with loss: {loss}")
+        metrics = run_training(data_config, ModelConfig(), train_config, paths)
+        print(f"--- Results for loss: {loss} ---")
+        print(_format_terminal_summary(metrics))
 
 
 if __name__ == "__main__":

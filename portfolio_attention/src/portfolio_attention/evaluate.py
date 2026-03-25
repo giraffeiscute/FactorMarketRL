@@ -388,13 +388,14 @@ def export_allocation_artifacts(
     )
 
     state_id = state_id_from_csv_path(source_csv_path)
+    scenario_dir = paths.get_scenario_predictions_dir(state_id)
     chart_title = (
         f"Top {allocation_group_top_n} Allocation Groups + Others + Cash: {state_id}\n"
         f"loss_name={loss_name} | portfolio_return={portfolio_return:.6f}"
     )
-    pie_chart_path = paths.outputs_dir / f"{state_id}_{loss_name}_allocation_pie.png"
-    bar_chart_path = paths.outputs_dir / f"{state_id}_{loss_name}_allocation_bar.png"
-    all_stock_weights_csv_path = paths.predictions_dir / f"{state_id}_{loss_name}_all_stock_weights.csv"
+    pie_chart_path = scenario_dir / f"{state_id}_{loss_name}_allocation_pie.png"
+    bar_chart_path = scenario_dir / f"{state_id}_{loss_name}_allocation_bar.png"
+    all_stock_weights_csv_path = scenario_dir / f"{state_id}_{loss_name}_all_stock_weights.csv"
 
     save_all_stock_weights_csv(all_stock_positions, all_stock_weights_csv_path)
     render_allocation_pie_chart(
@@ -430,6 +431,7 @@ def run_diagnostic_evaluation(
     top_k: int = 5,
     diagnostic_config: DiagnosticConfig | None = None,
     diagnostic_only: bool = True,
+    loss_name: str | None = None,
 ) -> dict:
     ensure_output_dirs(paths)
     device = resolve_device(device_name)
@@ -437,7 +439,9 @@ def run_diagnostic_evaluation(
     dataset = PortfolioPanelDataset(data_config)
     batch = dataset.get_backtest_batch(device=device)
 
-    resolved_checkpoint = checkpoint_path or (paths.checkpoints_dir / TrainConfig().checkpoint_name)
+    resolved_checkpoint = checkpoint_path or (
+        paths.checkpoints_dir / TrainConfig(loss_name=loss_name or "dsr").checkpoint_name
+    )
     checkpoint = torch.load(resolved_checkpoint, map_location=device, weights_only=False)
     _validate_checkpoint_metadata(checkpoint, dataset)
 
@@ -542,6 +546,7 @@ def run_diagnostic_evaluation(
         "allocation_bar_chart": allocation_payload["allocation_bar_chart"],
     }
     state_id = state_id_from_csv_path(data_config.csv_path)
+    scenario_dir = paths.get_scenario_predictions_dir(state_id)
     legacy_csv_path = paths.predictions_dir / "diagnostic_predictions.csv"
     if legacy_csv_path.exists():
         legacy_csv_path.unlink()
@@ -550,9 +555,9 @@ def run_diagnostic_evaluation(
         legacy_json_path.unlink()
     save_json(
         prediction_payload,
-        paths.predictions_dir / f"{state_id}_{checkpoint_loss_name}_diagnostic_predictions.json",
+        scenario_dir / f"{state_id}_{checkpoint_loss_name}_diagnostic_predictions.json",
     )
-    save_json(metrics_payload, paths.metrics_dir / "evaluation_metrics.json")
+    save_json(metrics_payload, paths.metrics_dir / f"evaluation_metrics_{checkpoint_loss_name}.json")
     return prediction_payload
 
 
@@ -564,6 +569,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--device", default="auto")
     parser.add_argument("--top-k", type=int, default=5)
     parser.add_argument("--num-stocks", type=int, default=None)
+    parser.add_argument(
+        "--loss",
+        default=None,
+        choices=[
+            "return",
+            "sharpe",
+            "dsr",
+            "sortino",
+            "mdd",
+            "cvar",
+        ],
+    )
     return parser
 
 
@@ -585,7 +602,7 @@ def main() -> None:
         payload = run_training(
             data_config=data_config,
             model_config=ModelConfig(),
-            train_config=TrainConfig(mode="train", device=args.device),
+            train_config=TrainConfig(mode="train", device=args.device, loss_name=args.loss or "dsr"),
             paths=paths,
         )
     else:
@@ -595,6 +612,7 @@ def main() -> None:
             checkpoint_path=args.checkpoint,
             device_name=args.device,
             top_k=args.top_k,
+            loss_name=args.loss,
         )
     print(_format_terminal_summary(payload))
 

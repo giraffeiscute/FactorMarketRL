@@ -44,6 +44,11 @@ class PathsConfig:
     def predictions_dir(self) -> Path:
         return self.outputs_dir / "predictions"
 
+    def get_scenario_predictions_dir(self, state_id: str) -> Path:
+        """依據 state_id (格式 {S}_{N}_{T}) 的前綴 S 取得對應的 predictions 子目錄。"""
+        scenario = state_id.split("_")[0]
+        return self.predictions_dir / scenario
+
 
 @dataclass
 class DataConfig:
@@ -97,7 +102,7 @@ class ModelConfig:
     cross_sectional_dim: int = 128
 
     # 股票 ID embedding 的維度大小。
-    stock_id_embedding_dim: int = 16
+    stock_id_embedding_dim: int = 64
 
     # attention 機制使用的 head 數量。
     attention_heads: int = 4
@@ -151,13 +156,19 @@ class TrainConfig:
     device: str = "auto"
 
     # train mode 下最佳模型 checkpoint 的檔名。
-    train_best_checkpoint_name: str = "train_best.pt"
+    @property
+    def train_best_checkpoint_name(self) -> str:
+        return f"train_best_{self.loss_name}.pt"
 
     # train mode 下最後一個 epoch 模型 checkpoint 的檔名。
-    train_last_checkpoint_name: str = "train_last.pt"
+    @property
+    def train_last_checkpoint_name(self) -> str:
+        return f"train_last_{self.loss_name}.pt"
 
     # diagnostic mode 使用或輸出的 checkpoint 檔名。
-    checkpoint_name: str = "diagnostic_last.pt"
+    @property
+    def checkpoint_name(self) -> str:
+        return f"diagnostic_last_{self.loss_name}.pt"
 
 
 @dataclass
