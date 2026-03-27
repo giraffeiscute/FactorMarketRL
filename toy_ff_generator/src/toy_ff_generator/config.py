@@ -151,20 +151,29 @@ def build_default_config() -> dict[str, Any]:
     # 預設模擬期數。
     T = 200
 
+    # 預設初始市場狀態。
+    initial_state = 1
+
     return {
         "simulation_setup": {
             # 股票總數。
             "N": N,
             # 模擬總期數。
             "T": T,
+            # batch 模式預設要產生的 dataset 份數。
+            "dataset_count": 64,
             # 隨機種子，確保結果可重現。
             "random_seed": 42,
+        },
+        "batch_setup": {
+            # multiprocessing worker 數量；None 代表自動決定。
+            "max_workers": 4,
         },
         "market_state_setup": {
             # 若為 None，表示依轉移矩陣自動產生市場狀態序列。
             "state_sequence": None,
             # 初始市場狀態，0 代表 neutral。
-            "initial_state": 0,
+            "initial_state": initial_state,
             # 市場狀態轉移矩陣，這裡預設為不轉移。
             "transition_matrix": [
                 [1, 0, 0],
@@ -286,6 +295,6 @@ def build_default_config() -> dict[str, Any]:
         },
         "output_setup": {
             # 輸出資料夾位置。
-            "output_dir": str(PROJECT_ROOT / "outputs"),
+            "output_dir": str(PROJECT_ROOT / "outputs" / "data v2" / STATE_NAME_MAP[initial_state]),
         },
     }

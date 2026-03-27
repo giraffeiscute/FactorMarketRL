@@ -1,12 +1,19 @@
 from __future__ import annotations
 
+import os
 import sys
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from copy import deepcopy
 from pathlib import Path
 from typing import Any, Mapping
 
 import numpy as np
 import pandas as pd
+
+try:
+    from tqdm.auto import tqdm
+except ImportError:  # pragma: no cover
+    tqdm = None
 
 if __package__ in {None, ""}:
     SRC_ROOT = Path(__file__).resolve().parents[1]
@@ -110,43 +117,27 @@ def _build_panel_filename(
     state_sequence: list[int],
     market_state_setup: Mapping[str, Any],
     simulation_setup: Mapping[str, Any],
+    dataset_number: int | None = None,
 ) -> str:
     state_name = _format_state_for_filename(state_sequence, market_state_setup)
     stock_count = int(simulation_setup["N"])
     time_count = int(simulation_setup["T"])
-    return f"{state_name}_{stock_count}_{time_count}_panel_long.csv"
-
-
-def _build_price_filename(
-    state_sequence: list[int],
-    market_state_setup: Mapping[str, Any],
-    simulation_setup: Mapping[str, Any],
-) -> str:
-    state_name = _format_state_for_filename(state_sequence, market_state_setup)
-    stock_count = int(simulation_setup["N"])
-    time_count = int(simulation_setup["T"])
-    return f"{state_name}_{stock_count}_{time_count}_price.csv"
-
-
-def _build_return_filename(
-    state_sequence: list[int],
-    market_state_setup: Mapping[str, Any],
-    simulation_setup: Mapping[str, Any],
-) -> str:
-    state_name = _format_state_for_filename(state_sequence, market_state_setup)
-    stock_count = int(simulation_setup["N"])
-    time_count = int(simulation_setup["T"])
-    return f"{state_name}_{stock_count}_{time_count}_return.csv"
+    if dataset_number is None:
+        return f"{state_name}_{stock_count}_{time_count}_PL.csv"
+    return f"{state_name}_{stock_count}_{time_count}_PL_{dataset_number}.csv"
 
 
 def _build_market_index_csv_filename(
     state_sequence: list[int],
     market_state_setup: Mapping[str, Any],
     simulation_setup: Mapping[str, Any],
+    dataset_number: int | None = None,
 ) -> str:
     state_name = _format_state_for_filename(state_sequence, market_state_setup)
     stock_count = int(simulation_setup["N"])
     time_count = int(simulation_setup["T"])
+    if dataset_number is not None:
+        return f"{state_name}_{stock_count}_{time_count}_market_index_{dataset_number}.csv"
     return f"{state_name}_{stock_count}_{time_count}_market_index.csv"
 
 
@@ -154,22 +145,14 @@ def _build_market_index_png_filename(
     state_sequence: list[int],
     market_state_setup: Mapping[str, Any],
     simulation_setup: Mapping[str, Any],
+    dataset_number: int | None = None,
 ) -> str:
     state_name = _format_state_for_filename(state_sequence, market_state_setup)
     stock_count = int(simulation_setup["N"])
     time_count = int(simulation_setup["T"])
+    if dataset_number is not None:
+        return f"{state_name}_{stock_count}_{time_count}_market_index_{dataset_number}.png"
     return f"{state_name}_{stock_count}_{time_count}_market_index.png"
-
-
-def _build_metadata_filename(
-    state_sequence: list[int],
-    market_state_setup: Mapping[str, Any],
-    simulation_setup: Mapping[str, Any],
-) -> str:
-    state_name = _format_state_for_filename(state_sequence, market_state_setup)
-    stock_count = int(simulation_setup["N"])
-    time_count = int(simulation_setup["T"])
-    return f"{state_name}_{stock_count}_{time_count}_metadata.json"
 
 
 def _apply_overrides(
@@ -179,6 +162,7 @@ def _apply_overrides(
     N: int | None = None,
     T: int | None = None,
     S: int | None = None,
+    dataset_count: int | None = None,
 ) -> dict[str, Any]:
     updated = deepcopy(config)
 
@@ -193,6 +177,8 @@ def _apply_overrides(
         updated["clipping_price_setup"]["per_stock_initial_price"] = _default_per_stock_initial_prices(N)
     if T is not None:
         updated["simulation_setup"]["T"] = T
+    if dataset_count is not None:
+        updated["simulation_setup"]["dataset_count"] = dataset_count
     if S is not None:
         updated["market_state_setup"]["state_sequence"] = [S] * updated["simulation_setup"]["T"]
         updated["market_state_setup"]["initial_state"] = S
@@ -200,22 +186,53 @@ def _apply_overrides(
     return updated
 
 
-def run_simulation(
-    output_dir: str | None = None,
-    seed: int | None = None,
-    N: int | None = None,
-    T: int | None = None,
-    S: int | None = None,
-) -> dict[str, Any]:
-    config = _apply_overrides(
-        config=build_default_config(),
-        output_dir=output_dir,
-        seed=seed,
-        N=N,
-        T=T,
-        S=S,
-    )
+def _resolve_max_workers(
+    batch_setup: Mapping[str, Any],
+    resolved_dataset_count: int,
+) -> int:
+    configured_max_workers = batch_setup.get("max_workers")
+    if configured_max_workers is None:
+        resolved_max_workers = min(os.cpu_count() or 1, resolved_dataset_count)
+    else:
+        resolved_max_workers = int(configured_max_workers)
 
+    return max(1, min(resolved_max_workers, resolved_dataset_count))
+
+
+def _build_dataset_config(
+    base_config: dict[str, Any],
+    dataset_index: int,
+) -> dict[str, Any]:
+    dataset_config = deepcopy(base_config)
+    dataset_config["simulation_setup"]["random_seed"] = (
+        int(base_config["simulation_setup"]["random_seed"]) + dataset_index
+    )
+    return dataset_config
+
+
+def _summarize_batch_result(result: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "dataset_number": result["dataset_number"],
+        "run_seed": result["run_seed"],
+        "output_paths": result["output_paths"],
+    }
+
+
+def _run_single_dataset_batch(
+    config: dict[str, Any],
+    dataset_number: int,
+) -> dict[str, Any]:
+    result = _run_simulation_from_config(
+        config=config,
+        dataset_number=dataset_number,
+    )
+    return _summarize_batch_result(result)
+
+
+def _run_simulation_from_config(
+    config: dict[str, Any],
+    dataset_number: int | None = None,
+) -> dict[str, Any]:
     simulation_setup = config["simulation_setup"]
     market_state_setup = config["market_state_setup"]
     factor_vector_ar_setup = config["factor_vector_ar_setup"]
@@ -425,39 +442,30 @@ def run_simulation(
         state_sequence=state_sequence,
         market_state_setup=market_state_setup,
         simulation_setup=simulation_setup,
-    )
-    price_filename = _build_price_filename(
-        state_sequence=state_sequence,
-        market_state_setup=market_state_setup,
-        simulation_setup=simulation_setup,
-    )
-    return_filename = _build_return_filename(
-        state_sequence=state_sequence,
-        market_state_setup=market_state_setup,
-        simulation_setup=simulation_setup,
+        dataset_number=dataset_number,
     )
     market_index_csv_filename = _build_market_index_csv_filename(
         state_sequence=state_sequence,
         market_state_setup=market_state_setup,
         simulation_setup=simulation_setup,
+        dataset_number=dataset_number,
     )
     market_index_png_filename = _build_market_index_png_filename(
         state_sequence=state_sequence,
         market_state_setup=market_state_setup,
         simulation_setup=simulation_setup,
+        dataset_number=dataset_number,
     )
-    metadata_filename = _build_metadata_filename(
-        state_sequence=state_sequence,
-        market_state_setup=market_state_setup,
-        simulation_setup=simulation_setup,
+    dataset_label = (
+        f" | dataset={dataset_number}"
+        if dataset_number is not None
+        else ""
     )
 
     output_paths = save_outputs(
         panel_long_df=panel_long_df,
         output_dir=output_setup["output_dir"],
         panel_filename=panel_filename,
-        price_filename=price_filename,
-        return_filename=return_filename,
         market_index_csv_filename=market_index_csv_filename,
         market_index_png_filename=market_index_png_filename,
         market_index_plot_title=(
@@ -465,13 +473,14 @@ def run_simulation(
             f"state={_format_state_for_filename(state_sequence, market_state_setup)} | "
             f"N={int(simulation_setup['N'])} | "
             f"T={int(simulation_setup['T'])}"
+            f"{dataset_label}"
         ),
-        metadata_filename=metadata_filename,
         time_columns=time_columns,
-        metadata=config,
     )
 
     return {
+        "dataset_number": dataset_number,
+        "run_seed": int(simulation_setup["random_seed"]),
         "config": config,
         "state_sequence": state_sequence,
         "factor_df": factor_df,
@@ -485,10 +494,86 @@ def run_simulation(
     }
 
 
-def main() -> pd.DataFrame:
-    result = run_simulation()
-    return result["panel_long_df"]
+def run_simulation(
+    output_dir: str | None = None,
+    seed: int | None = None,
+    N: int | None = None,
+    T: int | None = None,
+    S: int | None = None,
+    config: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    resolved_config = _apply_overrides(
+        config=build_default_config() if config is None else config,
+        output_dir=output_dir,
+        seed=seed,
+        N=N,
+        T=T,
+        S=S,
+    )
+    return _run_simulation_from_config(config=resolved_config)
+
+
+def run_batch_simulations(
+    output_dir: str | None = None,
+    seed: int | None = None,
+    N: int | None = None,
+    T: int | None = None,
+    S: int | None = None,
+    dataset_count: int | None = None,
+    config: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    base_config = _apply_overrides(
+        config=build_default_config() if config is None else config,
+        output_dir=output_dir,
+        seed=seed,
+        N=N,
+        T=T,
+        S=S,
+        dataset_count=dataset_count,
+    )
+    simulation_setup = base_config["simulation_setup"]
+    batch_setup = base_config["batch_setup"]
+    resolved_dataset_count = int(simulation_setup["dataset_count"])
+    max_workers = _resolve_max_workers(
+        batch_setup=batch_setup,
+        resolved_dataset_count=resolved_dataset_count,
+    )
+
+    tasks = [
+        (
+            _build_dataset_config(base_config=base_config, dataset_index=dataset_index),
+            dataset_index + 1,
+        )
+        for dataset_index in range(resolved_dataset_count)
+    ]
+
+    results: list[dict[str, Any]] = []
+    with ProcessPoolExecutor(max_workers=max_workers) as executor:
+        future_to_dataset_number = {
+            executor.submit(_run_single_dataset_batch, dataset_config, dataset_number): dataset_number
+            for dataset_config, dataset_number in tasks
+        }
+
+        completed_futures = as_completed(future_to_dataset_number)
+        if tqdm is not None:
+            completed_futures = tqdm(
+                completed_futures,
+                total=resolved_dataset_count,
+                desc="Generating datasets",
+                unit="dataset",
+            )
+
+        for future in completed_futures:
+            results.append(future.result())
+
+    return sorted(results, key=lambda item: int(item["dataset_number"]))
+
+
+def main(batch: bool = True):
+    if batch:
+        return run_batch_simulations()
+    return run_simulation()["panel_long_df"]
 
 
 if __name__ == "__main__":
-    main()
+    main(batch=True)

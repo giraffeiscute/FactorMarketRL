@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-import json
 import os
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Sequence
 
 import matplotlib
 import numpy as np
@@ -211,42 +210,21 @@ def save_outputs(
     panel_long_df: pd.DataFrame,
     output_dir: str | Path,
     panel_filename: str,
-    price_filename: str,
-    return_filename: str,
     market_index_csv_filename: str,
     market_index_png_filename: str,
     market_index_plot_title: str,
-    metadata_filename: str,
     time_columns: Sequence[str],
-    metadata: Mapping[str, Any],
 ) -> dict[str, Path | None]:
     output_path = ensure_output_dir(output_dir)
-
-    prices_wide = pivot_to_wide_matrix(
-        df=panel_long_df,
-        value_col="price",
-        time_columns=time_columns,
-    )
-    returns_wide = pivot_to_wide_matrix(
-        df=panel_long_df,
-        value_col="return",
-        time_columns=time_columns,
-    )
-
-    prices_path = output_path / price_filename
-    returns_path = output_path / return_filename
     panel_path = output_path / panel_filename
     market_index_csv_path = output_path / market_index_csv_filename
     market_index_png_path = output_path / market_index_png_filename
-    metadata_path = output_path / metadata_filename
     panel_long_output_df = _format_panel_long_for_csv(panel_long_df)
     market_index_df = build_market_index_df(
         panel_long_df=panel_long_df,
         time_columns=time_columns,
     )
 
-    _write_csv_atomically(prices_wide, prices_path, index=True)
-    _write_csv_atomically(returns_wide, returns_path, index=True)
     _write_csv_atomically(panel_long_output_df, panel_path, index=False)
     _write_csv_atomically(market_index_df, market_index_csv_path, index=False)
     _save_market_index_png(
@@ -254,18 +232,14 @@ def save_outputs(
         path=market_index_png_path,
         title=market_index_plot_title,
     )
-    _write_text_atomically(
-        metadata_path,
-        json.dumps(dict(metadata), indent=2),
-    )
 
     return {
-        "prices": prices_path,
-        "returns": returns_path,
+        "prices": None,
+        "returns": None,
         "panel_long": panel_path,
         "market_index_csv": market_index_csv_path,
         "market_index_png": market_index_png_path,
-        "metadata": metadata_path,
+        "metadata": None,
         "excel_workbook": None,
     }
 
