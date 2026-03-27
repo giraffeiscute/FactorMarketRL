@@ -1,0 +1,15 @@
+{
+  "loss_name": "dsr",
+  "status": "DONE",
+  "pid": 414207,
+  "updated_at": 1774433961.9101007,
+  "device": "cuda:0",
+  "epoch": 268,
+  "num_epochs": 300,
+  "progress_ratio": 1.0,
+  "best_epoch": 219,
+  "best_val_loss": -52.17266082763672,
+  "stopped_early": true,
+  "select_best_from_last_x_epochs": 50,
+  "started_at": 1774433874.6406808
+}

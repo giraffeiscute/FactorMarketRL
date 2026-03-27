@@ -1,0 +1,15 @@
+{
+  "loss_name": "cvar",
+  "status": "DONE",
+  "pid": 414210,
+  "updated_at": 1774434025.3280678,
+  "device": "cuda:0",
+  "epoch": 262,
+  "num_epochs": 300,
+  "progress_ratio": 1.0,
+  "best_epoch": 262,
+  "best_val_loss": -0.5246972441673279,
+  "stopped_early": true,
+  "select_best_from_last_x_epochs": 50,
+  "started_at": 1774433874.5508163
+}

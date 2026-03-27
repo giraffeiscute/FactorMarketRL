@@ -1,0 +1,15 @@
+{
+  "loss_name": "sortino",
+  "status": "DONE",
+  "pid": 414208,
+  "updated_at": 1774433960.8656628,
+  "device": "cuda:0",
+  "epoch": 261,
+  "num_epochs": 300,
+  "progress_ratio": 1.0,
+  "best_epoch": 261,
+  "best_val_loss": -0.5246915817260742,
+  "stopped_early": true,
+  "select_best_from_last_x_epochs": 50,
+  "started_at": 1774433874.6324627
+}

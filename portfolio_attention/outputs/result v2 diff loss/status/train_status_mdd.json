@@ -1,0 +1,15 @@
+{
+  "loss_name": "mdd",
+  "status": "DONE",
+  "pid": 414209,
+  "updated_at": 1774433939.6910095,
+  "device": "cuda:0",
+  "epoch": 101,
+  "num_epochs": 300,
+  "progress_ratio": 1.0,
+  "best_epoch": 52,
+  "best_val_loss": 0.0,
+  "stopped_early": true,
+  "select_best_from_last_x_epochs": 50,
+  "started_at": 1774433874.4334564
+}

@@ -1,0 +1,6 @@
+/root/FactorMarketRL/portfolio_attention/src/portfolio_attention/losses.py:198: RuntimeWarning: Sharpe loss received too few time steps (1); falling back to return loss.
+  return sharpe_loss(portfolio_returns, **kwargs)  # Sharpe 類別名
+/root/FactorMarketRL/QR_venv_ser/lib/python3.10/site-packages/torch/autograd/graph.py:865: UserWarning: Memory Efficient attention defaults to a non-deterministic algorithm. To explicitly enable determinism call torch.use_deterministic_algorithms(True, warn_only=False). (Triggered internally at /pytorch/aten/src/ATen/native/transformers/cuda/attention_backward.cu:897.)
+  return Variable._execution_engine.run_backward(  # Calls into the C++ engine to run the backward pass
+/root/FactorMarketRL/portfolio_attention/src/portfolio_attention/evaluate.py:535: RuntimeWarning: Sharpe loss received too few time steps (1); falling back to return loss.
+  (-sharpe_loss(outputs["portfolio_return"]).detach().cpu().item())
