@@ -1,4 +1,4 @@
-"""Diagnostic evaluation entry point."""
+"""Evaluation entry point."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ if __package__ is None or __package__ == "":
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from portfolio_attention.config import (
         DataConfig,
-        DiagnosticConfig,
+        EvaluationConfig,
         ModelConfig,
         PathsConfig,
         TrainConfig,
@@ -32,7 +32,7 @@ if __package__ is None or __package__ == "":
         state_id_from_csv_path,
     )
 else:
-    from .config import DataConfig, DiagnosticConfig, ModelConfig, PathsConfig, TrainConfig
+    from .config import DataConfig, EvaluationConfig, ModelConfig, PathsConfig, TrainConfig
     from .dataset import PortfolioPanelDataset
     from .losses import sharpe_loss
     from .model import PortfolioAttentionModel
@@ -82,7 +82,7 @@ def _load_aux_frame(source_csv_path: Path) -> pd.DataFrame:
     missing_columns = [column for column in REQUIRED_AUX_COLUMNS if column not in header]
     if missing_columns:
         raise ValueError(
-            "Diagnostic export requires source CSV columns: "
+            "Evaluation export requires source CSV columns: "
             f"{REQUIRED_AUX_COLUMNS}. Missing: {missing_columns}"
         )
 
@@ -147,7 +147,7 @@ def _get_aux_lookup(aux_frame: pd.DataFrame) -> dict[tuple[str, int], dict[str, 
             .to_dict("records")
         )
         raise ValueError(
-            "Diagnostic export found multiple source rows for the same "
+            "Evaluation export found multiple source rows for the same "
             "(stock_id, backtest_horizon_start_index) keys. "
             f"Examples: {duplicate_rows}"
         )
@@ -178,7 +178,7 @@ def enrich_positions(
         match = aux_lookup.get((stock_id, analysis_time_index))
         if match is None:
             raise ValueError(
-                f"Diagnostic export could not find exactly one source row for stock_id={stock_id} "
+                f"Evaluation export could not find exactly one source row for stock_id={stock_id} "
                 f"at backtest_horizon_start_index={analysis_time_index}."
             )
         enriched.append(
@@ -423,24 +423,23 @@ def export_allocation_artifacts(
     }
 
 
-def run_diagnostic_evaluation(
+def run_evaluation(
     data_config: DataConfig,
     paths: PathsConfig,
     checkpoint_path: Path | None = None,
     device_name: str = "auto",
     top_k: int = 5,
-    diagnostic_config: DiagnosticConfig | None = None,
-    diagnostic_only: bool = True,
+    evaluation_config: EvaluationConfig | None = None,
     loss_name: str | None = None,
 ) -> dict:
     ensure_output_dirs(paths)
     device = resolve_device(device_name)
-    resolved_diagnostic_config = diagnostic_config or DiagnosticConfig()
+    resolved_evaluation_config = evaluation_config or EvaluationConfig()
     dataset = PortfolioPanelDataset(data_config)
     batch = dataset.get_backtest_batch(device=device)
 
     resolved_checkpoint = checkpoint_path or (
-        paths.checkpoints_dir / TrainConfig(loss_name=loss_name or "dsr").checkpoint_name
+        paths.checkpoints_dir / TrainConfig(loss_name=loss_name or "dsr").train_best_checkpoint_name
     )
     checkpoint = torch.load(resolved_checkpoint, map_location=device, weights_only=False)
     _validate_checkpoint_metadata(checkpoint, dataset)
@@ -508,14 +507,13 @@ def run_diagnostic_evaluation(
         portfolio_return=portfolio_return,
         paths=paths,
         source_csv_path=source_csv_path,
-        allocation_group_top_n=resolved_diagnostic_config.allocation_group_top_n,
+        allocation_group_top_n=resolved_evaluation_config.allocation_group_top_n,
         loss_name=checkpoint_loss_name,
     )
 
     prediction_payload = {
         "source_path": allocation_payload["source_path"],
         "loss_name": checkpoint_loss_name,
-        "diagnostic_only": diagnostic_only,
         "evaluation_split": "backtest",
         "device": str(device),
         "train_config": _extract_exported_train_config(checkpoint),
@@ -547,23 +545,16 @@ def run_diagnostic_evaluation(
     }
     state_id = state_id_from_csv_path(data_config.csv_path)
     scenario_dir = paths.get_scenario_predictions_dir(state_id)
-    legacy_csv_path = paths.predictions_dir / "diagnostic_predictions.csv"
-    if legacy_csv_path.exists():
-        legacy_csv_path.unlink()
-    legacy_json_path = paths.predictions_dir / "diagnostic_predictions.json"
-    if legacy_json_path.exists():
-        legacy_json_path.unlink()
     save_json(
         prediction_payload,
-        scenario_dir / f"{state_id}_{checkpoint_loss_name}_diagnostic_predictions.json",
+        scenario_dir / f"{state_id}_{checkpoint_loss_name}_predictions.json",
     )
     save_json(metrics_payload, paths.metrics_dir / f"evaluation_metrics_{checkpoint_loss_name}.json")
     return prediction_payload
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Run diagnostic evaluation for portfolio_attention.")
-    parser.add_argument("--mode", default="diagnostic", choices=["diagnostic", "train"])
+    parser = argparse.ArgumentParser(description="Run evaluation for portfolio_attention.")
     parser.add_argument("--data-path", type=Path, default=None)
     parser.add_argument("--checkpoint", type=Path, default=None)
     parser.add_argument("--device", default="auto")
@@ -592,28 +583,14 @@ def main() -> None:
         csv_path=args.data_path or default_data_config.csv_path,
         num_stocks=args.num_stocks,
     )
-    if args.mode == "train":
-        if args.checkpoint is not None:
-            raise ValueError("--checkpoint is only supported when --mode=diagnostic.")
-        if __package__ is None or __package__ == "":
-            from portfolio_attention.train import run_training
-        else:
-            from .train import run_training
-        payload = run_training(
-            data_config=data_config,
-            model_config=ModelConfig(),
-            train_config=TrainConfig(mode="train", device=args.device, loss_name=args.loss or "dsr"),
-            paths=paths,
-        )
-    else:
-        payload = run_diagnostic_evaluation(
-            data_config=data_config,
-            paths=paths,
-            checkpoint_path=args.checkpoint,
-            device_name=args.device,
-            top_k=args.top_k,
-            loss_name=args.loss,
-        )
+    payload = run_evaluation(
+        data_config=data_config,
+        paths=paths,
+        checkpoint_path=args.checkpoint,
+        device_name=args.device,
+        top_k=args.top_k,
+        loss_name=args.loss,
+    )
     print(_format_terminal_summary(payload))
 
 

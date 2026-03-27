@@ -127,7 +127,7 @@ class TrainConfig:
     seed: int = 42
 
     # optimizer 使用的學習率。
-    learning_rate: float = 5e-3
+    learning_rate: float = 1e-4
 
     # 每次訓練迭代使用的 batch 大小。
     batch_size: int = 1
@@ -136,7 +136,7 @@ class TrainConfig:
     num_epochs: int = 300
 
     # 權重衰減係數，用於 regularization。
-    weight_decay: float = 1e-4
+    weight_decay: float = 1e-3
 
     # gradient clipping 的最大 norm，避免梯度爆炸。
     grad_clip_norm: float = 1.0
@@ -152,37 +152,31 @@ class TrainConfig:
     # - 非正整數：為了避免無效設定，執行時會自動視為 1。
     select_best_from_last_x_epochs: int = 50
 
-    # diagnostic 模式中每次分析使用的步數或樣本步長設定。
-    diagnostic_steps: int = 1
-
     # 訓練使用的 loss 名稱，例如 "return", "sharpe", "dsr", "sortino", "mdd", "cvar"。
-    loss_name: str = "dsr"
-
-    # 執行模式，通常為 "train" 或 "diagnostic"。
-    mode: str = "train"
+    loss_name: str = ""
 
     # 執行裝置設定，例如 "cpu"、"cuda" 或 "auto"。
     device: str = "auto"
 
+    def _checkpoint_name(self, stem: str) -> str:
+        if self.loss_name:
+            return f"{stem}_{self.loss_name}.pt"
+        return f"{stem}.pt"
+
     # train mode 下最佳模型 checkpoint 的檔名。
     @property
     def train_best_checkpoint_name(self) -> str:
-        return f"train_best_{self.loss_name}.pt"
+        return self._checkpoint_name("train_best")
 
     # train mode 下最後一個 epoch 模型 checkpoint 的檔名。
     @property
     def train_last_checkpoint_name(self) -> str:
-        return f"train_last_{self.loss_name}.pt"
-
-    # diagnostic mode 使用或輸出的 checkpoint 檔名。
-    @property
-    def checkpoint_name(self) -> str:
-        return f"diagnostic_last_{self.loss_name}.pt"
+        return self._checkpoint_name("train_last")
 
 
 @dataclass
-class DiagnosticConfig:
-    """診斷與圖表輸出相關設定。"""
+class EvaluationConfig:
+    """Evaluation 與圖表輸出相關設定。"""
 
     # allocation 圖表中保留前幾大群組，其餘合併為 Others。
     allocation_group_top_n: int = 7

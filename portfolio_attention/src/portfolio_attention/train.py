@@ -19,9 +19,6 @@ from torch.utils.data import DataLoader
 try:
     from rich.live import Live
     from rich.table import Table
-    from rich.progress import Progress, BarColumn, TextColumn, TimeElapsedColumn, SpinnerColumn
-    from rich.console import Console, Group
-    from rich.panel import Panel
     HAS_RICH = True
 except ImportError:
     HAS_RICH = False
@@ -30,13 +27,12 @@ if __package__ is None or __package__ == "":
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from portfolio_attention.config import (
         DataConfig,
-        DiagnosticConfig,
         ModelConfig,
         PathsConfig,
         TrainConfig,
     )
     from portfolio_attention.dataset import PortfolioPanelDataset
-    from portfolio_attention.evaluate import run_diagnostic_evaluation
+    from portfolio_attention.evaluate import run_evaluation
     from portfolio_attention.losses import build_loss
     from portfolio_attention.model import PortfolioAttentionModel
     from portfolio_attention.utils import (
@@ -49,9 +45,9 @@ if __package__ is None or __package__ == "":
         set_seed,
     )
 else:
-    from .config import DataConfig, DiagnosticConfig, ModelConfig, PathsConfig, TrainConfig
+    from .config import DataConfig, ModelConfig, PathsConfig, TrainConfig
     from .dataset import PortfolioPanelDataset
-    from .evaluate import run_diagnostic_evaluation
+    from .evaluate import run_evaluation
     from .losses import build_loss
     from .model import PortfolioAttentionModel
     from .utils import (
@@ -439,103 +435,6 @@ def _evaluate_epoch(
     return total_loss / total_samples, total_return / total_samples
 
 
-def run_diagnostic_training(
-    data_config: DataConfig,
-    model_config: ModelConfig,
-    train_config: TrainConfig,
-    paths: PathsConfig,
-) -> dict:
-    set_seed(train_config.seed)
-    ensure_output_dirs(paths)
-    device = resolve_device(train_config.device)
-    log_path = paths.logs_dir / f"train_{train_config.loss_name}.log"
-    _log_reproducibility_status(log_path, train_config, device)
-
-    dataset = PortfolioPanelDataset(data_config)
-    model = PortfolioAttentionModel(
-        model_config,
-        num_stocks=dataset.num_stocks,
-        max_lookback=dataset.model_lookback,
-    ).to(device)
-    optimizer = torch.optim.Adam(
-        model.parameters(),
-        lr=train_config.learning_rate,
-        weight_decay=train_config.weight_decay,
-    )
-    batch = dataset.get_backtest_batch(device=device)
-
-    metrics: dict[str, float | int | bool | str | dict] = {
-        "mode": "diagnostic",
-        "device": str(device),
-        "diagnostic_only": True,
-        "evaluation_split": "backtest",
-        "loaded_feature_columns": {
-            "stock": dataset.loaded_stock_feature_columns,
-            "market": dataset.loaded_market_feature_columns,
-        },
-        "selected_num_stocks": dataset.metadata.selected_num_stocks,
-    }
-
-    append_log(
-        log_path,
-        (
-            "Loaded feature columns successfully: "
-            f"stock={dataset.loaded_stock_feature_columns} "
-            f"market={dataset.loaded_market_feature_columns}"
-        ),
-    )
-    _append_dataset_split_summary(log_path, dataset)
-    append_log(
-        log_path,
-        "Running diagnostic mode on the single fixed backtest sample defined by the backtest-split tail horizon.",
-    )
-
-    loss_value = None
-    portfolio_return = None
-    model.train()
-    for step in range(train_config.diagnostic_steps):
-        optimizer.zero_grad(set_to_none=True)
-        loss, portfolio_return = _run_loss_step(model, batch, train_config.loss_name)
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), train_config.grad_clip_norm)
-        optimizer.step()
-        loss_value = float(loss.detach().cpu().item())
-        append_log(
-            log_path,
-            f"diagnostic_step={step} loss={loss_value:.8f} portfolio_return={float(portfolio_return.mean().detach().cpu().item()):.8f}",
-        )
-
-    checkpoint_path = paths.checkpoints_dir / train_config.checkpoint_name
-    torch.save(
-        _build_checkpoint_payload(
-            model=model,
-            optimizer=optimizer,
-            model_config=model_config,
-            data_config=data_config,
-            train_config=train_config,
-            dataset=dataset,
-            epoch=None,
-            best_val_loss=None,
-        ),
-        checkpoint_path,
-    )
-
-    if portfolio_return is None or loss_value is None:
-        raise RuntimeError("Diagnostic loop did not produce outputs.")
-
-    metrics.update(
-        {
-            "loss_name": train_config.loss_name,
-            "final_loss": loss_value,
-            "portfolio_return": float(portfolio_return.mean().detach().cpu().item()),
-            "checkpoint_path": str(checkpoint_path),
-            "metadata": dataset.metadata.as_dict(),
-        }
-    )
-    save_json(metrics, paths.metrics_dir / f"diagnostic_metrics_{train_config.loss_name}.json")
-    return metrics
-
-
 def run_epoch_training(
     data_config: DataConfig,
     model_config: ModelConfig,
@@ -551,9 +450,7 @@ def run_epoch_training(
     dataset = PortfolioPanelDataset(data_config)
     train_dataset, validation_dataset, backtest_dataset = dataset.build_train_validation_backtest_datasets()
     if len(train_dataset) == 0 or len(validation_dataset) == 0 or len(backtest_dataset) == 0:
-        raise RuntimeError(
-            "Train mode requires exactly one train sample, one validation sample, and one backtest sample."
-        )
+        raise RuntimeError("Training requires exactly one train sample, one validation sample, and one backtest sample.")
 
     model = PortfolioAttentionModel(
         model_config,
@@ -596,7 +493,7 @@ def run_epoch_training(
     append_log(
         log_path,
         (
-            "Running epoch-based train mode with "
+            "Running epoch-based training with "
             f"train_windows={len(train_dataset)} validation_windows={len(validation_dataset)} "
             f"backtest_windows={len(backtest_dataset)} "
             f"batch_size={train_config.batch_size} num_epochs={train_config.num_epochs} "
@@ -611,6 +508,7 @@ def run_epoch_training(
     best_checkpoint_path = paths.checkpoints_dir / train_config.train_best_checkpoint_name
     last_checkpoint_path = paths.checkpoints_dir / train_config.train_last_checkpoint_name
     epoch_selection_records: list[dict[str, Any]] = []
+    history: list[dict[str, float | int | bool]] = []
 
     # Initial status update
     _write_training_status(
@@ -657,6 +555,7 @@ def run_epoch_training(
                 "val_loss": val_loss,
                 "val_portfolio_return": val_return,
             }
+            history.append(dict(epoch_metrics))
             epochs_completed = epoch
             global_best_checkpoint_updated = False
 
@@ -806,19 +705,16 @@ def run_epoch_training(
     _cleanup_temp_epoch_checkpoints(epoch_selection_records)
 
     append_log(log_path, f"Loading best checkpoint for final backtest evaluation: {best_checkpoint_path}.")
-    final_backtest = run_diagnostic_evaluation(
+    final_backtest = run_evaluation(
         data_config=data_config,
         paths=paths,
         checkpoint_path=best_checkpoint_path,
         device_name=train_config.device,
-        diagnostic_config=DiagnosticConfig(),
-        diagnostic_only=False,
     )
 
     metrics: dict[str, Any] = {
         "mode": "train",
         "device": str(device),
-        "diagnostic_only": False,
         "loaded_feature_columns": {
             "stock": dataset.loaded_stock_feature_columns,
             "market": dataset.loaded_market_feature_columns,
@@ -828,6 +724,7 @@ def run_epoch_training(
         "batch_size": train_config.batch_size,
         "num_epochs_requested": train_config.num_epochs,
         "epochs_completed": epochs_completed,
+        "history": history,
         "best_epoch": best_epoch,
         "best_val_loss": best_val_loss,
         "select_best_from_last_x_epochs": train_config.select_best_from_last_x_epochs,
@@ -868,17 +765,11 @@ def run_training(
     train_config: TrainConfig,
     paths: PathsConfig,
 ) -> dict:
-    normalized_mode = train_config.mode.lower()
-    if normalized_mode == "diagnostic":
-        return run_diagnostic_training(data_config, model_config, train_config, paths)
-    if normalized_mode == "train":
-        return run_epoch_training(data_config, model_config, train_config, paths)
-    raise ValueError(f"Unsupported mode: {train_config.mode}")
+    return run_epoch_training(data_config, model_config, train_config, paths)
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run training for portfolio_attention.")
-    parser.add_argument("--mode", default=argparse.SUPPRESS, choices=["diagnostic", "train"])
     parser.add_argument("--data-path", type=Path, default=argparse.SUPPRESS)
     parser.add_argument("--device", default=argparse.SUPPRESS)
     parser.add_argument(
@@ -896,7 +787,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--losses", type=str, default=argparse.SUPPRESS)
     parser.add_argument("--parallel", type=int, default=1)
-    parser.add_argument("--diagnostic-steps", type=int, default=argparse.SUPPRESS)
     parser.add_argument("--seed", type=int, default=argparse.SUPPRESS)
     parser.add_argument("--num-stocks", type=int, default=argparse.SUPPRESS)
     parser.add_argument("--batch-size", type=int, default=argparse.SUPPRESS)
@@ -935,12 +825,8 @@ def resolve_runtime_configs_from_args(
         resolved_data_config = replace(resolved_data_config, **data_overrides)
 
     train_overrides = {}
-    if "mode" in args_dict:
-        train_overrides["mode"] = args_dict["mode"]
     if "device" in args_dict:
         train_overrides["device"] = args_dict["device"]
-    if "diagnostic_steps" in args_dict:
-        train_overrides["diagnostic_steps"] = args_dict["diagnostic_steps"]
     if "seed" in args_dict:
         train_overrides["seed"] = args_dict["seed"]
     if "loss" in args_dict:
@@ -1177,4 +1063,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
