@@ -6,6 +6,7 @@ from typing import Any
 
 import torch
 from torch import nn
+import math
 
 from .config import ModelConfig
 
@@ -39,7 +40,7 @@ class PortfolioAttentionModel(nn.Module):
         self.config = config
         self.num_stocks = num_stocks
         self.max_lookback = max_lookback
-        self.time_position_mode = "causal_running_mean"
+        self.time_position_mode = config.time_positional_encoding_type
         self.id_position_mode = "concat"
 
         self.stock_input_proj = nn.Linear(config.stock_feature_dim, config.cross_sectional_dim)
@@ -82,6 +83,29 @@ class PortfolioAttentionModel(nn.Module):
         view_shape = [1, values.shape[1]] + [1] * (values.ndim - 2)
         return values.cumsum(dim=1) / steps.view(*view_shape)
 
+    @staticmethod
+    def _build_sinusoidal_time_encoding(
+        *,
+        time_steps: int,
+        embedding_dim: int,
+        device: torch.device,
+        dtype: torch.dtype,
+    ) -> torch.Tensor:
+        if time_steps <= 0:
+            raise ValueError(f"time_steps must be positive, received {time_steps}.")
+        if embedding_dim <= 0:
+            raise ValueError(f"embedding_dim must be positive, received {embedding_dim}.")
+
+        positions = torch.arange(time_steps, device=device, dtype=dtype).unsqueeze(1)
+        div_term = torch.exp(
+            torch.arange(0, embedding_dim, 2, device=device, dtype=dtype)
+            * (-math.log(10000.0) / embedding_dim)
+        )
+        encoding = torch.zeros((time_steps, embedding_dim), device=device, dtype=dtype)
+        encoding[:, 0::2] = torch.sin(positions * div_term)
+        encoding[:, 1::2] = torch.cos(positions * div_term[: encoding[:, 1::2].shape[1]])
+        return encoding.unsqueeze(0)
+
     def forward(
         self,
         x_stock: torch.Tensor,
@@ -110,8 +134,25 @@ class PortfolioAttentionModel(nn.Module):
             )
 
         stock_current = self.stock_input_proj(x_stock)
-        stock_running = self._causal_running_mean(stock_current)
         market_current = self.market_input_proj(x_market)
+
+        if self.time_position_mode == "sinusoidal":
+            stock_time_encoding = self._build_sinusoidal_time_encoding(
+                time_steps=time_steps,
+                embedding_dim=self.config.cross_sectional_dim,
+                device=stock_current.device,
+                dtype=stock_current.dtype,
+            ).unsqueeze(2)
+            market_time_encoding = self._build_sinusoidal_time_encoding(
+                time_steps=time_steps,
+                embedding_dim=self.config.market_temporal_dim,
+                device=market_current.device,
+                dtype=market_current.dtype,
+            )
+            stock_current = stock_current + stock_time_encoding
+            market_current = market_current + market_time_encoding
+
+        stock_running = self._causal_running_mean(stock_current)
         market_running = self._causal_running_mean(market_current)
 
         market_current_expanded = market_current.unsqueeze(2).expand(-1, -1, num_stocks, -1)

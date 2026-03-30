@@ -69,9 +69,9 @@ class DataConfig:
     scenario_dir: Path = field(default_factory=default_scenario_dir)
     scenario_glob: str = "{state}_*_PL_*.parquet"
 
-    num_train_scenarios: int = 48
+    num_train_scenarios: int = 54
     num_validation_scenarios: int = 8
-    num_test_scenarios: int = 8
+    num_test_scenarios: int = 2
 
     scenario_train_split_ratio: float = 0.70
     scenario_validation_split_ratio: float = 0.15
@@ -80,6 +80,7 @@ class DataConfig:
     # Number of full scenarios processed per optimizer step.
     scenario_batch_size: int = 8
     shuffle_train_scenarios: bool = True
+    shuffle_train_scenarios_seed: int = 2
 
     # Fixed or maximum stock universe size to keep from each scenario.
     num_stocks: int = 4860
@@ -99,6 +100,15 @@ class DataConfig:
                 "DataConfig.scenario_batch_size must be positive, "
                 f"received {self.scenario_batch_size}."
             )
+
+        if self.shuffle_train_scenarios_seed is not None:
+            resolved_shuffle_seed = int(self.shuffle_train_scenarios_seed)
+            if resolved_shuffle_seed < 0:
+                raise ValueError(
+                    "DataConfig.shuffle_train_scenarios_seed must be non-negative, "
+                    f"received {self.shuffle_train_scenarios_seed}."
+                )
+            self.shuffle_train_scenarios_seed = resolved_shuffle_seed
 
         ratio_fields = {
             "scenario_train_split_ratio": float(self.scenario_train_split_ratio),
@@ -143,12 +153,22 @@ class ModelConfig:
 
     stock_feature_dim: int = 4
     market_feature_dim: int = 3
-    stock_temporal_dim: int = 16
-    market_temporal_dim: int = 8
-    cross_sectional_dim: int = 8
-    stock_id_embedding_dim: int = 4
-    attention_heads: int = 1
+    stock_temporal_dim: int = 64
+    market_temporal_dim: int = 32
+    cross_sectional_dim: int = 64
+    stock_id_embedding_dim: int = 32
+    time_positional_encoding_type: str = "sinusoidal"
+    attention_heads: int = 4
     dropout: float = 0.0
+
+    def __post_init__(self) -> None:
+        valid_time_positional_encoding_types = {"running_mean", "sinusoidal"}
+        if self.time_positional_encoding_type not in valid_time_positional_encoding_types:
+            raise ValueError(
+                "ModelConfig.time_positional_encoding_type must be one of "
+                f"{sorted(valid_time_positional_encoding_types)}, "
+                f"received {self.time_positional_encoding_type!r}."
+            )
 
     def as_dict(self) -> dict:
         return asdict(self)
@@ -164,7 +184,7 @@ class TrainConfig:
     weight_decay: float = 1e-3
     grad_clip_norm: float = 1.0
     early_stopping_patience: int = 100
-    select_best_from_last_x_epochs: int = 50
+    select_best_from_last_x_epochs: int = 100
     loss_name: str = ""
     device: str = "auto"
 
@@ -187,4 +207,3 @@ class EvaluationConfig:
     """Evaluation and visualization settings."""
 
     allocation_group_top_n: int = 7
-    best_scenario_weight_plot_top_n: int = 5

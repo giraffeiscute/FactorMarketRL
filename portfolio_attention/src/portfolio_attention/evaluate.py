@@ -289,6 +289,87 @@ def summarize_grouped_allocations(
     return head + [others] + cash_allocations
 
 
+def _allocation_group_key(mu: object, epsilon_variance: object, alpha: object) -> tuple[str, str, str]:
+    return (str(mu), str(epsilon_variance), str(alpha))
+
+
+def format_allocation_group_label(grouped_allocation: dict[str, object]) -> str:
+    mu = str(grouped_allocation["mu"])
+    epsilon_variance = str(grouped_allocation["epsilon_variance"])
+    alpha = str(grouped_allocation["alpha"])
+    if mu in {"Cash", "Others"} and mu == epsilon_variance == alpha:
+        return mu
+    return f"mu={mu} | eps={epsilon_variance} | alpha={alpha}"
+
+
+def _build_grouped_weight_trajectories(
+    *,
+    aux_frame: pd.DataFrame,
+    analysis_time_index: int,
+    stock_ids: list[str],
+    stock_weights: torch.Tensor,
+    cash_weights: torch.Tensor,
+    grouped_allocations_top_n: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    if stock_weights.ndim != 2:
+        raise ValueError("stock_weights must have shape [T, N].")
+    if cash_weights.ndim != 1:
+        raise ValueError("cash_weights must have shape [T].")
+    if stock_weights.shape[0] != cash_weights.shape[0]:
+        raise ValueError(
+            "stock_weights and cash_weights must share the same time dimension. "
+            f"Received stock_weights.shape={tuple(stock_weights.shape)} and "
+            f"cash_weights.shape={tuple(cash_weights.shape)}."
+        )
+    if stock_weights.shape[1] != len(stock_ids):
+        raise ValueError(
+            "stock_weights.shape[1] must match len(stock_ids). "
+            f"Received {stock_weights.shape[1]} stocks and {len(stock_ids)} ids."
+        )
+
+    aux_lookup = _get_aux_lookup(aux_frame)
+    zero_series = torch.zeros(stock_weights.shape[0], dtype=stock_weights.dtype, device=stock_weights.device)
+    grouped_series: dict[tuple[str, str, str], torch.Tensor] = {}
+    for index, stock_id in enumerate(stock_ids):
+        match = aux_lookup.get((str(stock_id), analysis_time_index))
+        if match is None:
+            raise ValueError(
+                f"Evaluation export could not find exactly one source row for stock_id={stock_id} "
+                f"at analysis_time_index={analysis_time_index}."
+            )
+        key = _allocation_group_key(
+            match["mu"],
+            match["epsilon_variance"],
+            match["alpha"],
+        )
+        if key not in grouped_series:
+            grouped_series[key] = zero_series.clone()
+        grouped_series[key] = grouped_series[key] + stock_weights[:, index]
+
+    trajectories: list[dict[str, object]] = []
+    for item in grouped_allocations_top_n:
+        mu = str(item["mu"])
+        if mu == "Cash":
+            weights = cash_weights
+        elif mu == "Others":
+            continue
+        else:
+            key = _allocation_group_key(item["mu"], item["epsilon_variance"], item["alpha"])
+            weights = grouped_series.get(key)
+            if weights is None:
+                raise ValueError(
+                    "Grouped allocation summary referenced a group that is missing from the "
+                    f"trajectory aggregation: {format_allocation_group_label(item)}."
+                )
+        trajectories.append(
+            {
+                "label": format_allocation_group_label(item),
+                "weights": weights,
+            }
+        )
+    return trajectories
+
+
 def render_allocation_pie_chart(
     grouped_allocations: list[dict[str, object]],
     output_path: Path,
@@ -297,10 +378,7 @@ def render_allocation_pie_chart(
     if not grouped_allocations:
         raise ValueError("Cannot render allocation pie chart without grouped allocations.")
 
-    labels = [
-        f"mu={item['mu']} | eps={item['epsilon_variance']} | alpha={item['alpha']}"
-        for item in grouped_allocations
-    ]
+    labels = [format_allocation_group_label(item) for item in grouped_allocations]
     sizes = [float(item["total_weight"]) for item in grouped_allocations]
 
     fig, ax = plt.subplots(figsize=(10, 10))
@@ -328,10 +406,7 @@ def render_allocation_bar_chart(
     if not grouped_allocations:
         raise ValueError("Cannot render allocation bar chart without grouped allocations.")
 
-    labels = [
-        f"mu={item['mu']}\neps={item['epsilon_variance']}\nalpha={item['alpha']}"
-        for item in grouped_allocations
-    ]
+    labels = [format_allocation_group_label(item) for item in grouped_allocations]
     values = [float(item["total_weight"]) for item in grouped_allocations]
 
     fig, ax = plt.subplots(figsize=(14, 7))
@@ -411,35 +486,32 @@ def export_allocation_artifacts(
 def render_weight_trajectory_chart(
     *,
     scenario_id: str,
-    stock_ids: list[str],
-    stock_weights: torch.Tensor,
-    cash_weights: torch.Tensor,
+    grouped_weight_trajectories: list[dict[str, object]],
     target_time_indices: torch.Tensor,
-    top_n: int,
     output_path: Path,
 ) -> None:
-    if stock_weights.ndim != 2:
-        raise ValueError("stock_weights must have shape [T, N].")
-    if cash_weights.ndim != 1:
-        raise ValueError("cash_weights must have shape [T].")
-
-    average_weights = stock_weights.mean(dim=0)
-    top_n = min(int(top_n), stock_weights.shape[1])
-    top_values, top_indices = torch.topk(average_weights, k=top_n)
+    if target_time_indices.ndim != 1:
+        raise ValueError("target_time_indices must have shape [T].")
+    if not grouped_weight_trajectories:
+        raise ValueError("grouped_weight_trajectories must be non-empty.")
 
     fig, ax = plt.subplots(figsize=(14, 7))
     x_axis = target_time_indices.detach().cpu().numpy()
-    for weight, index in zip(top_values.tolist(), top_indices.tolist()):
-        del weight
+    for item in grouped_weight_trajectories:
+        weights = item["weights"]
+        if not isinstance(weights, torch.Tensor):
+            raise ValueError("Each trajectory entry must provide a tensor in 'weights'.")
+        linestyle = "--" if str(item["label"]) == "Cash" else "-"
         ax.plot(
             x_axis,
-            stock_weights[:, index].detach().cpu().numpy(),
-            label=stock_ids[int(index)],
+            weights.detach().cpu().numpy(),
+            label=str(item["label"]),
+            linestyle=linestyle,
+            linewidth=2 if str(item["label"]) == "Cash" else 1.5,
         )
-    ax.plot(x_axis, cash_weights.detach().cpu().numpy(), label="Cash", linestyle="--", linewidth=2)
     ax.set_xlabel("Target Time Index")
     ax.set_ylabel("Weight")
-    ax.set_title(f"Best Holdout Scenario Weight Trajectory: {scenario_id}")
+    ax.set_title(f"Best Holdout Scenario Group Weight Trajectory: {scenario_id}")
     ax.legend(loc="upper right", fontsize=8)
     fig.tight_layout()
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -576,6 +648,7 @@ def _export_best_backtest_payload(
         "payload": exported_payload,
         "prediction_json_path": str(prediction_json_path),
         "all_stock_weights_csv": str(allocation_payload["all_stock_weights_csv"]),
+        "grouped_allocations_top_n": allocation_payload["grouped_allocations_top_n"],
         "allocation_pie_chart": str(allocation_payload["allocation_pie_chart"]),
         "allocation_bar_chart": str(allocation_payload["allocation_bar_chart"]),
     }
@@ -689,20 +762,6 @@ def run_evaluation(
     best_payload = per_scenario_payloads[best_index]
     worst_payload = per_scenario_payloads[worst_index]
 
-    best_weight_plot_path = (
-        state_predictions_dir
-        / f"{checkpoint_loss_name}_best_backtest_scenario_weight_trajectory.png"
-    )
-    render_weight_trajectory_chart(
-        scenario_id=str(best_payload["scenario_id"]),
-        stock_ids=dataset.selected_stock_ids,
-        stock_weights=best_payload["_stock_weights_tensor"],
-        cash_weights=best_payload["_cash_weights_tensor"],
-        target_time_indices=best_payload["_target_time_indices_tensor"],
-        top_n=resolved_evaluation_config.best_scenario_weight_plot_top_n,
-        output_path=best_weight_plot_path,
-    )
-
     best_export = _export_best_backtest_payload(
         best_payload=best_payload,
         checkpoint=checkpoint,
@@ -710,6 +769,25 @@ def run_evaluation(
         output_dir=state_predictions_dir,
         evaluation_config=resolved_evaluation_config,
         loss_name=checkpoint_loss_name,
+    )
+    best_weight_plot_path = (
+        state_predictions_dir
+        / f"{checkpoint_loss_name}_best_backtest_scenario_weight_trajectory.png"
+    )
+    best_aux_frame = _load_aux_frame(Path(str(best_payload["source_path"])))
+    grouped_weight_trajectories = _build_grouped_weight_trajectories(
+        aux_frame=best_aux_frame,
+        analysis_time_index=int(best_payload["analysis_time_index"]),
+        stock_ids=dataset.selected_stock_ids,
+        stock_weights=best_payload["_stock_weights_tensor"],
+        cash_weights=best_payload["_cash_weights_tensor"],
+        grouped_allocations_top_n=list(best_export["grouped_allocations_top_n"]),
+    )
+    render_weight_trajectory_chart(
+        scenario_id=str(best_payload["scenario_id"]),
+        grouped_weight_trajectories=grouped_weight_trajectories,
+        target_time_indices=best_payload["_target_time_indices_tensor"],
+        output_path=best_weight_plot_path,
     )
 
     per_scenario_rows = [

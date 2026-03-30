@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from dataclasses import asdict, replace
 import json
+import math
 import os
 from pathlib import Path
 import shutil
@@ -102,21 +103,36 @@ def _write_training_status(
         previous_payload = json.loads(status_path.read_text(encoding="utf-8"))
     except (FileNotFoundError, json.JSONDecodeError, OSError):
         previous_payload = {}
+    current_time = time.time()
 
     payload = {
         "loss_name": loss_name,
         "status": status,
         "pid": os.getpid(),
-        "updated_at": time.time(),
+        "updated_at": current_time,
         "phase": kwargs.get("phase", previous_payload.get("phase", "queued")),
         "message": kwargs.get("message", previous_payload.get("message", "")),
         **kwargs,
     }
     if "started_at" not in payload:
         if status in NON_TERMINAL_STATUSES:
-            payload["started_at"] = previous_payload.get("started_at", time.time())
+            payload["started_at"] = previous_payload.get("started_at", current_time)
         elif status in {"DONE", "FAILED"} and "started_at" in previous_payload:
             payload["started_at"] = previous_payload["started_at"]
+
+    started_at = payload.get("started_at")
+    if "elapsed_seconds" not in payload:
+        if started_at is not None:
+            try:
+                payload["elapsed_seconds"] = max(0.0, current_time - float(started_at))
+            except (TypeError, ValueError):
+                payload["elapsed_seconds"] = None
+        else:
+            payload["elapsed_seconds"] = None
+    if "avg_epoch_seconds" not in payload:
+        payload["avg_epoch_seconds"] = previous_payload.get("avg_epoch_seconds")
+    if "eta_seconds" not in payload:
+        payload["eta_seconds"] = None if payload.get("phase") != "training" else previous_payload.get("eta_seconds")
 
     status_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
@@ -162,6 +178,9 @@ def _dashboard_signature(status_rows: list[dict[str, Any]]) -> str:
             "train_loss": row.get("train_loss"),
             "val_loss": row.get("val_loss"),
             "best_val_loss": row.get("best_val_loss"),
+            "elapsed_seconds": row.get("elapsed_seconds"),
+            "avg_epoch_seconds": row.get("avg_epoch_seconds"),
+            "eta_seconds": row.get("eta_seconds"),
             "message": row.get("message"),
         }
         for row in status_rows
@@ -175,6 +194,21 @@ def _should_use_live_dashboard() -> bool:
     is_tty = getattr(sys.stdout, "isatty", lambda: False)()
     term = os.environ.get("TERM", "")
     return bool(is_tty and term and term.lower() != "dumb")
+
+
+def _format_duration(seconds: object | None) -> str:
+    if seconds is None:
+        return "N/A"
+    try:
+        numeric_seconds = float(seconds)
+    except (TypeError, ValueError):
+        return "N/A"
+    if not math.isfinite(numeric_seconds):
+        return "N/A"
+    total_seconds = max(0, int(round(numeric_seconds)))
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, secs = divmod(remainder, 60)
+    return f"{hours:02d}:{minutes:02d}:{secs:02d}"
 
 
 def _render_multi_loss_dashboard(
@@ -193,7 +227,10 @@ def _render_multi_loss_dashboard(
                 f"Epoch {epoch}/{num_epochs} | "
                 f"Train {float(status_data.get('train_loss', 0.0)):.6f} | "
                 f"Val {float(status_data.get('val_loss', 0.0)):.6f} | "
-                f"Best {float(status_data.get('best_val_loss', 0.0)):.6f}"
+                f"Best {float(status_data.get('best_val_loss', 0.0)):.6f} | "
+                f"Elapsed {_format_duration(status_data.get('elapsed_seconds'))} | "
+                f"Avg/Epoch {_format_duration(status_data.get('avg_epoch_seconds'))} | "
+                f"ETA {_format_duration(status_data.get('eta_seconds'))}"
             )
         return "\n".join(lines)
 
@@ -211,6 +248,9 @@ def _render_multi_loss_dashboard(
     table.add_column("Train Loss", justify="right")
     table.add_column("Val Loss", justify="right")
     table.add_column("Best Val", justify="right")
+    table.add_column("Elapsed", justify="right")
+    table.add_column("Avg/Epoch", justify="right")
+    table.add_column("ETA", justify="right")
 
     for data in status_rows:
         loss = str(data.get("loss_name", "unknown"))
@@ -240,6 +280,9 @@ def _render_multi_loss_dashboard(
             f"{float(data.get('train_loss', 0.0)):.6f}",
             f"{float(data.get('val_loss', 0.0)):.6f}",
             f"{float(data.get('best_val_loss', 0.0)):.6f}",
+            _format_duration(data.get("elapsed_seconds")),
+            _format_duration(data.get("avg_epoch_seconds")),
+            _format_duration(data.get("eta_seconds")),
         )
     return table
 
@@ -371,6 +414,12 @@ def _run_loss_step(
     return loss, portfolio_returns, summary
 
 
+def _resolve_shuffle_train_scenarios_seed(data_config: DataConfig, train_config: TrainConfig) -> int:
+    if data_config.shuffle_train_scenarios_seed is not None:
+        return int(data_config.shuffle_train_scenarios_seed)
+    return int(train_config.seed)
+
+
 def _build_checkpoint_payload(
     *,
     model: PortfolioAttentionModel,
@@ -499,8 +548,9 @@ def run_epoch_training(
         weight_decay=train_config.weight_decay,
     )
 
+    resolved_shuffle_seed = _resolve_shuffle_train_scenarios_seed(data_config, train_config)
     generator = torch.Generator()
-    generator.manual_seed(train_config.seed)
+    generator.manual_seed(resolved_shuffle_seed)
     scenario_batch_size = int(data_config.scenario_batch_size)
     train_loader = DataLoader(
         train_dataset,
@@ -533,6 +583,8 @@ def run_epoch_training(
             "Running scenario-based training with "
             f"train_scenarios={len(train_dataset)} validation_scenarios={len(validation_dataset)} "
             f"holdout_test_scenarios={len(test_dataset)} scenario_batch_size={scenario_batch_size} "
+            f"shuffle_train_scenarios={bool(data_config.shuffle_train_scenarios)} "
+            f"shuffle_train_scenarios_seed={resolved_shuffle_seed} "
             f"num_epochs={train_config.num_epochs} "
             f"select_best_from_last_x_epochs={train_config.select_best_from_last_x_epochs} "
             f"normalized_best_epoch_selection_window={selection_window}."
@@ -547,6 +599,7 @@ def run_epoch_training(
     epoch_selection_records: list[dict[str, Any]] = []
     history: list[dict[str, float | int | bool]] = []
     shape_logged = False
+    completed_epoch_seconds_total = 0.0
 
     current_phase = "training"
     _write_training_status(
@@ -557,12 +610,15 @@ def run_epoch_training(
         epoch=0,
         num_epochs=train_config.num_epochs,
         progress_ratio=0.0,
+        avg_epoch_seconds=None,
+        eta_seconds=None,
         phase=current_phase,
         message="Dataset ready; waiting for first optimizer step.",
     )
 
     try:
         for epoch in range(1, train_config.num_epochs + 1):
+            epoch_started_at = time.time()
             model.train()
             total_train_loss = 0.0
             total_train_final_return = 0.0
@@ -617,13 +673,21 @@ def run_epoch_training(
             history.append(dict(epoch_metrics))
             epochs_completed = epoch
             global_best_checkpoint_updated = False
+            epoch_duration_seconds = time.time() - epoch_started_at
+            completed_epoch_seconds_total += epoch_duration_seconds
+            avg_epoch_seconds = completed_epoch_seconds_total / epochs_completed
+            remaining_epochs = max(0, train_config.num_epochs - epochs_completed)
+            eta_seconds = avg_epoch_seconds * remaining_epochs
 
             append_log(
                 log_path,
                 (
                     f"epoch={epoch} train_loss={train_loss:.8f} "
                     f"train_mean_final_return={train_mean_final_return:.8f} "
-                    f"val_loss={val_loss:.8f} val_mean_final_return={val_mean_final_return:.8f}"
+                    f"val_loss={val_loss:.8f} val_mean_final_return={val_mean_final_return:.8f} "
+                    f"epoch_duration_seconds={epoch_duration_seconds:.4f} "
+                    f"avg_epoch_seconds={avg_epoch_seconds:.4f} "
+                    f"eta_seconds={eta_seconds:.4f}"
                 ),
             )
             append_log(log_path, f"Aggregated validation loss at epoch {epoch}: {val_loss:.8f}")
@@ -715,6 +779,8 @@ def run_epoch_training(
                 global_best_val_loss=global_best_val_loss,
                 epochs_without_improvement=epochs_without_improvement,
                 select_best_from_last_x_epochs=selection_window,
+                avg_epoch_seconds=avg_epoch_seconds,
+                eta_seconds=eta_seconds,
                 phase=current_phase,
                 message="Running optimizer and validation steps.",
             )
@@ -779,6 +845,10 @@ def run_epoch_training(
         progress_ratio=1.0,
         best_epoch=best_epoch,
         best_val_loss=best_val_loss,
+        avg_epoch_seconds=(
+            completed_epoch_seconds_total / epochs_completed if epochs_completed > 0 else None
+        ),
+        eta_seconds=None,
         phase=current_phase,
         message="Running final held-out evaluation on the best checkpoint.",
     )
@@ -808,6 +878,7 @@ def run_epoch_training(
         },
         "loss_name": train_config.loss_name,
         "seed": train_config.seed,
+        "shuffle_train_scenarios_seed": resolved_shuffle_seed,
         "scenario_batch_size": scenario_batch_size,
         "num_epochs_requested": train_config.num_epochs,
         "epochs_completed": epochs_completed,
@@ -841,6 +912,10 @@ def run_epoch_training(
         best_val_loss=best_val_loss,
         stopped_early=epochs_completed < train_config.num_epochs,
         select_best_from_last_x_epochs=selection_window,
+        avg_epoch_seconds=(
+            completed_epoch_seconds_total / epochs_completed if epochs_completed > 0 else None
+        ),
+        eta_seconds=None,
         phase="completed",
         message="Training and evaluation finished successfully.",
     )
