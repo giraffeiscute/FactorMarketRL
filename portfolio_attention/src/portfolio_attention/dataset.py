@@ -1,4 +1,4 @@
-"""Dataset loading and validation for portfolio_attention."""
+"""Scenario-aware dataset loading and validation for portfolio_attention."""
 
 from __future__ import annotations
 
@@ -10,12 +10,13 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+import pyarrow.parquet as pq
 import torch
 from torch.utils.data import Dataset
 
 from .config import DataConfig
 
-REQUIRED_COLUMNS = [
+BASE_REQUIRED_COLUMNS = [
     "stock_id",
     "t",
     "characteristic_1",
@@ -26,6 +27,7 @@ REQUIRED_COLUMNS = [
     "HML",
     "price",
 ]
+OPTIONAL_RETURN_COLUMN = "return"
 STOCK_FEATURE_COLUMNS = [
     "characteristic_1",
     "characteristic_2",
@@ -33,16 +35,32 @@ STOCK_FEATURE_COLUMNS = [
     "price",
 ]
 MARKET_FEATURE_COLUMNS = ["MKT", "SMB", "HML"]
-NUMERIC_COLUMNS = STOCK_FEATURE_COLUMNS + MARKET_FEATURE_COLUMNS
+NUMERIC_COLUMNS = STOCK_FEATURE_COLUMNS + MARKET_FEATURE_COLUMNS + [OPTIONAL_RETURN_COLUMN]
+LOADABLE_COLUMNS = BASE_REQUIRED_COLUMNS + [OPTIONAL_RETURN_COLUMN]
+SCENARIO_FILE_PATTERN = re.compile(
+    r"^(?P<state>.+?)_(?P<n>\d+)_(?P<t>\d+)_PL_(?P<scenario_index>\d+)\.parquet$"
+)
 
 
 def parse_panel_dimensions(file_name: str) -> tuple[int, int]:
-    """Parse N and T from `{prefix_}N_T_panel_long.csv`."""
+    """Parse `(N, T)` from a scenario file name like `{state}_{N}_{T}_PL_{idx}.parquet`."""
 
-    match = re.search(r"(?:^|_)(?P<n>\d+)_(?P<t>\d+)_panel_long\.csv$", file_name)
+    match = SCENARIO_FILE_PATTERN.fullmatch(file_name)
     if not match:
         raise ValueError(f"Could not parse N/T from file name: {file_name}")
     return int(match.group("n")), int(match.group("t"))
+
+
+def parse_scenario_file_info(file_name: str) -> dict[str, int | str]:
+    match = SCENARIO_FILE_PATTERN.fullmatch(file_name)
+    if not match:
+        raise ValueError(f"Unsupported scenario file name: {file_name}")
+    return {
+        "state": match.group("state"),
+        "parsed_n": int(match.group("n")),
+        "parsed_t": int(match.group("t")),
+        "scenario_index": int(match.group("scenario_index")),
+    }
 
 
 def _parse_time_label(raw_value: Any) -> int:
@@ -52,6 +70,17 @@ def _parse_time_label(raw_value: Any) -> int:
             raise ValueError(f"Unsupported time label: {raw_value}")
         return int(match.group(1))
     return int(raw_value)
+
+
+def _parse_time_series(series: pd.Series) -> np.ndarray:
+    if pd.api.types.is_integer_dtype(series) or pd.api.types.is_float_dtype(series):
+        return pd.to_numeric(series, errors="raise").to_numpy(dtype=np.int64, copy=False)
+
+    normalized = series.astype(str).str.strip()
+    if not normalized.str.startswith("t_").all():
+        invalid = normalized[~normalized.str.startswith("t_")].iloc[0]
+        raise ValueError(f"Unsupported time label: {invalid}")
+    return normalized.str.slice(2).astype(np.int64).to_numpy(copy=False)
 
 
 def _coerce_numeric_series(series: pd.Series) -> pd.Series:
@@ -68,7 +97,7 @@ def _coerce_numeric_series(series: pd.Series) -> pd.Series:
 
 
 class Standardizer:
-    """Simple ndarray standardizer fit only on training rows."""
+    """Simple ndarray standardizer fit only on train-scenario train-segment rows."""
 
     def __init__(self) -> None:
         self.mean: np.ndarray | None = None
@@ -82,111 +111,270 @@ class Standardizer:
         self.std = np.where(std < 1e-6, 1.0, std)
         return self
 
+    def set_statistics(self, mean: np.ndarray, std: np.ndarray) -> "Standardizer":
+        self.mean = mean.astype(np.float32)
+        self.std = np.where(std < 1e-6, 1.0, std).astype(np.float32)
+        return self
+
     def transform(self, values: np.ndarray) -> np.ndarray:
         if self.mean is None or self.std is None:
             raise RuntimeError("Standardizer must be fit before transform.")
         return (values - self.mean) / self.std
 
 
-@dataclass
-class PanelMetadata:
-    """Dataset summary for the three-split single-sample rule."""
+class RunningMoments:
+    """Streaming moments helper used to avoid fitting scalers on validation/test rows."""
 
+    def __init__(self, feature_dim: int) -> None:
+        self.feature_dim = feature_dim
+        self.count = 0
+        self.sum = np.zeros((feature_dim,), dtype=np.float64)
+        self.sum_sq = np.zeros((feature_dim,), dtype=np.float64)
+
+    def update(self, values: np.ndarray) -> None:
+        if values.ndim != 2 or values.shape[1] != self.feature_dim:
+            raise ValueError(
+                f"Expected values with shape [*, {self.feature_dim}], received {values.shape}."
+            )
+        self.count += int(values.shape[0])
+        self.sum += values.sum(axis=0, dtype=np.float64)
+        self.sum_sq += np.square(values, dtype=np.float64).sum(axis=0, dtype=np.float64)
+
+    def finalize(self) -> tuple[np.ndarray, np.ndarray]:
+        if self.count <= 0:
+            raise ValueError("Cannot finalize moments without any observations.")
+        mean = self.sum / float(self.count)
+        variance = (self.sum_sq / float(self.count)) - np.square(mean)
+        variance = np.maximum(variance, 1e-12)
+        return mean.astype(np.float32), np.sqrt(variance).astype(np.float32)
+
+
+@dataclass
+class ScenarioFileRecord:
+    scenario_id: str
     source_path: str
+    state: str
+    scenario_index: int
     parsed_n: int
     parsed_t: int
-    csv_unique_stocks: int
-    csv_unique_times: int
-    total_num_days: int
-    train_days: int
-    validation_days: int
-    backtest_days: int
-    train_split_ratio: float
-    validation_split_ratio: float
-    backtest_split_ratio: float
-    train_split_start_index: int
-    train_split_end_index: int
-    validation_split_start_index: int
-    validation_split_end_index: int
-    backtest_split_start_index: int
-    backtest_split_end_index: int
-    train_split_length: int
-    validation_split_length: int
-    backtest_split_length: int
-    analysis_horizon_days: int
-    train_horizon_start_index: int
-    train_horizon_end_index: int
-    validation_horizon_start_index: int
-    validation_horizon_end_index: int
-    backtest_horizon_start_index: int
-    backtest_horizon_end_index: int
-    dynamic_train_lookback_length: int
-    dynamic_validation_lookback_length: int
-    dynamic_backtest_lookback_length: int
-    model_lookback: int
-    train_window_count: int
-    validation_window_count: int
-    backtest_window_count: int
-    selected_num_stocks: int
-    effective_time_steps: int
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
 
 
-@dataclass(frozen=True)
-class WindowSpec:
-    """Defines one cross-sectional sample window inside the panel."""
+@dataclass
+class ScenarioSegmentRecord:
+    """One full scenario segment.
 
+    Tensor layout for a single record:
+    - `x_stock`: [T_split, N, F_stock]
+    - `x_market`: [T_split, F_market]
+    - `r_stock`: [T_split, N]
+    - `stock_indices`: [N]
+
+    A DataLoader stacks these into:
+    - `x_stock`: [S, T_split, N, F_stock]
+    - `x_market`: [S, T_split, F_market]
+    - `r_stock`: [S, T_split, N]
+    - `stock_indices`: [S, N]
+
+    `S` is the scenario batch dimension and must never be flattened together with
+    the time dimension `T_split`.
+    """
+
+    scenario_id: str
+    source_path: str
     split_name: str
-    start_index: int
-    lookback_length: int
-    horizon_start_index: int
-    horizon_end_index: int
+    feature_time_indices: np.ndarray
+    target_time_indices: np.ndarray
+    x_stock: np.ndarray
+    x_market: np.ndarray
+    r_stock: np.ndarray
+    stock_indices: np.ndarray
 
 
-class PortfolioWindowDataset(Dataset):
-    """Single-window dataset used by train.py for epoch-based training."""
+@dataclass
+class ScenarioDatasetMetadata:
+    scenario_dir: str
+    scenario_glob: str
+    state: str
+    total_scenarios_found: int
+    num_train_scenarios: int
+    num_validation_scenarios: int
+    num_test_scenarios: int
+    train_scenarios: list[str]
+    validation_scenarios: list[str]
+    test_scenarios: list[str]
+    total_num_days: int
+    train_segment_start_index: int
+    train_segment_end_index: int
+    validation_segment_start_index: int
+    validation_segment_end_index: int
+    test_segment_start_index: int
+    test_segment_end_index: int
+    train_segment_raw_length: int
+    validation_segment_raw_length: int
+    test_segment_raw_length: int
+    train_segment_time_steps: int
+    validation_segment_time_steps: int
+    test_segment_time_steps: int
+    scenario_train_split_ratio: float
+    scenario_validation_split_ratio: float
+    scenario_test_split_ratio: float
+    scenario_batch_size: int
+    shuffle_train_scenarios: bool
+    selected_num_stocks: int
+    parsed_n: int
+    parsed_t: int
 
-    def __init__(
-        self,
-        panel_dataset: "PortfolioPanelDataset",
-        window_specs: list[WindowSpec],
-    ) -> None:
-        self.panel_dataset = panel_dataset
-        self.window_specs = window_specs
+    def as_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class LoadedScenarioArrays:
+    record: ScenarioFileRecord
+    stock_ids: list[str]
+    time_index: list[int]
+    stock_features_raw: np.ndarray
+    market_features_raw: np.ndarray
+    stock_returns_raw: np.ndarray
+
+
+class ScenarioSegmentDataset(Dataset):
+    """Dataset returning one full scenario segment per sample."""
+
+    def __init__(self, scenario_segments: list[ScenarioSegmentRecord]) -> None:
+        self.scenario_segments = scenario_segments
 
     def __len__(self) -> int:
-        return len(self.window_specs)
+        return len(self.scenario_segments)
 
-    def __getitem__(self, index: int) -> dict[str, torch.Tensor]:
-        window = self.panel_dataset.get_window(self.window_specs[index])
+    def __getitem__(self, index: int) -> dict[str, torch.Tensor | str]:
+        item = self.scenario_segments[index]
         return {
-            key: torch.from_numpy(value)
-            for key, value in window.items()
+            "scenario_id": item.scenario_id,
+            "source_path": item.source_path,
+            "split_name": item.split_name,
+            "feature_time_indices": torch.from_numpy(item.feature_time_indices.astype(np.int64)),
+            "target_time_indices": torch.from_numpy(item.target_time_indices.astype(np.int64)),
+            "x_stock": torch.from_numpy(item.x_stock.astype(np.float32)),
+            "x_market": torch.from_numpy(item.x_market.astype(np.float32)),
+            "r_stock": torch.from_numpy(item.r_stock.astype(np.float32)),
+            "stock_indices": torch.from_numpy(item.stock_indices.astype(np.int64)),
         }
 
 
 class PortfolioPanelDataset:
-    """Loads the long-format panel and builds fixed train/validation/backtest samples.
+    """Scenario-only dataset manager.
 
-    Each split contributes exactly one cross-sectional sample. A sample keeps the
-    full stock universe intact, uses the split's final `analysis_horizon_days`
-    as its horizon, and uses every day before that horizon as lookback.
+    Each scenario file represents one path. Train/validation/test scenario groups
+    are deterministic file splits. Within each scenario, time is split again and
+    each dataset sample is the entire segment, not many windows mixed together.
     """
 
     def __init__(self, config: DataConfig) -> None:
         self.config = config
-        self.csv_path = Path(config.csv_path)
-        if not self.csv_path.exists():
-            raise FileNotFoundError(f"Dataset not found: {self.csv_path}")
+        self.scenario_dir = Path(config.scenario_dir)
+        if not self.scenario_dir.exists():
+            raise FileNotFoundError(f"Scenario directory not found: {self.scenario_dir}")
 
-        self.parsed_n, self.parsed_t = parse_panel_dimensions(self.csv_path.name)
-        self.model_lookback = 0
-        self._load()
+        self.loaded_stock_feature_columns = list(STOCK_FEATURE_COLUMNS)
+        self.loaded_market_feature_columns = list(MARKET_FEATURE_COLUMNS)
+        self.ignored_extra_columns: list[str] = []
+        self.state = self.scenario_dir.name
+        self.stock_scaler = Standardizer()
+        self.market_scaler = Standardizer()
 
-    def _resolve_selected_stock_indices(self) -> np.ndarray:
-        actual_num_stocks = len(self.stock_ids)
+        self.train_segment_records: list[ScenarioSegmentRecord] = []
+        self.validation_segment_records: list[ScenarioSegmentRecord] = []
+        self.test_segment_records: list[ScenarioSegmentRecord] = []
+        self._scenario_arrays_cache: dict[str, LoadedScenarioArrays] = {}
+
+        self._discover_scenarios()
+        self._fit_standardizers_on_train_scenarios()
+        self._materialize_scenario_segments()
+        self._build_metadata()
+
+    def _discover_scenarios(self) -> None:
+        scenario_glob = self.config.scenario_glob.format(state=self.state)
+        matched_paths = sorted(
+            self.scenario_dir.glob(scenario_glob),
+            key=self._scenario_sort_key,
+        )
+        records: list[ScenarioFileRecord] = []
+        for path in matched_paths:
+            info = parse_scenario_file_info(path.name)
+            if str(info["state"]) != self.state:
+                continue
+            records.append(
+                ScenarioFileRecord(
+                    scenario_id=path.stem,
+                    source_path=str(path),
+                    state=str(info["state"]),
+                    scenario_index=int(info["scenario_index"]),
+                    parsed_n=int(info["parsed_n"]),
+                    parsed_t=int(info["parsed_t"]),
+                )
+            )
+
+        expected_total = self.config.expected_total_scenarios
+        if len(records) != expected_total:
+            raise ValueError(
+                f"Expected exactly {expected_total} scenario files in {self.scenario_dir}, "
+                f"but found {len(records)} matching '{scenario_glob}'."
+            )
+
+        self.scenario_records = records
+        self.train_scenario_records = records[: self.config.num_train_scenarios]
+        val_start = self.config.num_train_scenarios
+        val_end = val_start + self.config.num_validation_scenarios
+        self.validation_scenario_records = records[val_start:val_end]
+        self.test_scenario_records = records[val_end:]
+
+    @staticmethod
+    def _scenario_sort_key(path: Path) -> tuple[str, int]:
+        info = parse_scenario_file_info(path.name)
+        return str(info["state"]), int(info["scenario_index"])
+
+    def _validate_reference_schema(
+        self,
+        *,
+        record: ScenarioFileRecord,
+        stock_ids: list[str],
+        time_index: list[int],
+    ) -> None:
+        if not hasattr(self, "parsed_n"):
+            self.parsed_n = record.parsed_n
+            self.parsed_t = record.parsed_t
+            self.reference_stock_ids = list(stock_ids)
+            self.reference_stock_id_to_position = {
+                stock_id: index for index, stock_id in enumerate(self.reference_stock_ids)
+            }
+            self.reference_time_index = list(time_index)
+            self.reference_time_index_array = np.asarray(self.reference_time_index, dtype=np.int64)
+            self.selected_stock_indices = self._resolve_selected_stock_indices(len(stock_ids))
+            self.selected_stock_ids = [
+                stock_ids[index] for index in self.selected_stock_indices.tolist()
+            ]
+            self._resolve_time_segment_lengths(self.parsed_t)
+            return
+
+        if record.parsed_n != self.parsed_n or record.parsed_t != self.parsed_t:
+            raise ValueError(
+                "All scenarios must share the same parsed N/T. "
+                f"Expected ({self.parsed_n}, {self.parsed_t}), "
+                f"received ({record.parsed_n}, {record.parsed_t}) "
+                f"for {record.source_path}."
+            )
+        if stock_ids != self.reference_stock_ids:
+            raise ValueError(
+                "All scenarios must share the same stock universe ordering after sorting."
+            )
+        if time_index != self.reference_time_index:
+            raise ValueError("All scenarios must share the same time index ordering after sorting.")
+
+    def _resolve_selected_stock_indices(self, actual_num_stocks: int) -> np.ndarray:
         requested_num_stocks = self.config.num_stocks
         if requested_num_stocks is None:
             return np.arange(actual_num_stocks, dtype=np.int64)
@@ -195,291 +383,320 @@ class PortfolioPanelDataset:
         if requested_num_stocks > actual_num_stocks:
             raise ValueError(
                 f"Requested fixed num_stocks={requested_num_stocks}, "
-                f"but dataset only provides {actual_num_stocks} stocks."
+                f"but scenario data only provides {actual_num_stocks} stocks."
             )
         return np.arange(requested_num_stocks, dtype=np.int64)
 
-    def _build_window_spec(
+    def _validate_ratio_sum(
         self,
         *,
-        split_name: str,
-        horizon_start_index: int,
-        horizon_end_index: int,
-        lookback_length: int,
-    ) -> WindowSpec:
-        if lookback_length <= 0:
-            raise ValueError(
-                f"dynamic_{split_name}_lookback_length must be positive, received {lookback_length}."
-            )
-        return WindowSpec(
-            split_name=split_name,
-            start_index=0,
-            lookback_length=lookback_length,
-            horizon_start_index=horizon_start_index,
-            horizon_end_index=horizon_end_index,
-        )
-
-    def _validate_split_ratios(self) -> None:
-        ratio_sum = (
-            float(self.config.train_split_ratio)
-            + float(self.config.validation_split_ratio)
-            + float(self.config.backtest_split_ratio)
-        )
+        train_ratio: float,
+        validation_ratio: float,
+        test_ratio: float,
+    ) -> None:
+        ratio_sum = float(train_ratio) + float(validation_ratio) + float(test_ratio)
         if not math.isclose(ratio_sum, 1.0, rel_tol=0.0, abs_tol=1e-9):
             raise ValueError(
-                "DataConfig train/validation/backtest split ratios must sum to 1.0. "
-                f"Received train_split_ratio={self.config.train_split_ratio}, "
-                f"validation_split_ratio={self.config.validation_split_ratio}, "
-                f"backtest_split_ratio={self.config.backtest_split_ratio}, "
+                "Scenario time split ratios must sum to 1.0. "
+                f"Received train={train_ratio}, validation={validation_ratio}, test={test_ratio}, "
                 f"sum={ratio_sum:.12f}."
             )
         for name, value in (
-            ("train_split_ratio", self.config.train_split_ratio),
-            ("validation_split_ratio", self.config.validation_split_ratio),
-            ("backtest_split_ratio", self.config.backtest_split_ratio),
+            ("scenario_train_split_ratio", train_ratio),
+            ("scenario_validation_split_ratio", validation_ratio),
+            ("scenario_test_split_ratio", test_ratio),
         ):
             if value <= 0.0:
                 raise ValueError(f"DataConfig.{name} must be positive, received {value}.")
 
-    def _resolve_split_lengths(self) -> None:
-        self._validate_split_ratios()
-
-        self.train_split_end_index = int(self.parsed_t * float(self.config.train_split_ratio)) - 1
-        self.validation_split_end_index = (
-            int(self.parsed_t * float(self.config.train_split_ratio + self.config.validation_split_ratio)) - 1
+    def _resolve_time_segment_lengths(self, total_time_steps: int) -> None:
+        self._validate_ratio_sum(
+            train_ratio=self.config.scenario_train_split_ratio,
+            validation_ratio=self.config.scenario_validation_split_ratio,
+            test_ratio=self.config.scenario_test_split_ratio,
         )
-        self.backtest_split_end_index = self.parsed_t - 1
-
-        self.train_split_start_index = 0
-        self.validation_split_start_index = self.train_split_end_index + 1
-        self.backtest_split_start_index = self.validation_split_end_index + 1
-
-        self.train_days = self.train_split_end_index - self.train_split_start_index + 1
-        self.validation_days = self.validation_split_end_index - self.validation_split_start_index + 1
-        self.backtest_days = self.backtest_split_end_index - self.backtest_split_start_index + 1
-
-        if self.train_days <= 0 or self.validation_days <= 0 or self.backtest_days <= 0:
-            raise ValueError(
-                "Configured split ratios must produce non-empty train, validation, and backtest splits. "
-                f"Received train_days={self.train_days}, "
-                f"validation_days={self.validation_days}, backtest_days={self.backtest_days}."
+        train_end = int(total_time_steps * float(self.config.scenario_train_split_ratio))
+        validation_end = int(
+            total_time_steps
+            * float(
+                self.config.scenario_train_split_ratio
+                + self.config.scenario_validation_split_ratio
             )
-
-    @staticmethod
-    def _validate_split_length(
-        *,
-        split_name: str,
-        split_length: int,
-        analysis_horizon_days: int,
-    ) -> None:
-        if split_length <= analysis_horizon_days:
-            raise ValueError(
-                f"{split_name}_split_length={split_length} must be greater than analysis_horizon_days="
-                f"{analysis_horizon_days} so the {split_name} split can contain the full horizon and leave a "
-                "valid lookback."
-            )
-
-    def _initialize_single_sample_windows(self) -> None:
-        analysis_horizon_days = int(self.config.analysis_horizon_days)
-        if analysis_horizon_days <= 0:
-            raise ValueError("analysis_horizon_days must be positive.")
-
-        self._validate_split_length(
-            split_name="train",
-            split_length=self.train_days,
-            analysis_horizon_days=analysis_horizon_days,
-        )
-        self._validate_split_length(
-            split_name="validation",
-            split_length=self.validation_days,
-            analysis_horizon_days=analysis_horizon_days,
-        )
-        self._validate_split_length(
-            split_name="backtest",
-            split_length=self.backtest_days,
-            analysis_horizon_days=analysis_horizon_days,
         )
 
-        self.analysis_horizon_days = analysis_horizon_days
-        self.train_horizon_start_index = self.train_split_end_index - analysis_horizon_days + 1
-        self.train_horizon_end_index = self.train_split_end_index
-        self.validation_horizon_start_index = self.validation_split_end_index - analysis_horizon_days + 1
-        self.validation_horizon_end_index = self.validation_split_end_index
-        self.backtest_horizon_start_index = self.backtest_split_end_index - analysis_horizon_days + 1
-        self.backtest_horizon_end_index = self.backtest_split_end_index
+        self.train_segment_start_index = 0
+        self.train_segment_end_index = train_end
+        self.validation_segment_start_index = train_end
+        self.validation_segment_end_index = validation_end
+        self.test_segment_start_index = validation_end
+        self.test_segment_end_index = total_time_steps
 
-        self.dynamic_train_lookback_length = self.train_horizon_start_index
-        self.dynamic_validation_lookback_length = self.validation_horizon_start_index
-        self.dynamic_backtest_lookback_length = self.backtest_horizon_start_index
-
-        if self.dynamic_train_lookback_length <= 0:
-            raise ValueError(
-                "dynamic_train_lookback_length must be positive under the fixed single-sample rule. "
-                f"Received {self.dynamic_train_lookback_length}."
-            )
-        if self.dynamic_validation_lookback_length <= 0:
-            raise ValueError(
-                "dynamic_validation_lookback_length must be positive under the fixed single-sample rule. "
-                f"Received {self.dynamic_validation_lookback_length}."
-            )
-        if self.dynamic_backtest_lookback_length <= 0:
-            raise ValueError(
-                "dynamic_backtest_lookback_length must be positive under the fixed single-sample rule. "
-                f"Received {self.dynamic_backtest_lookback_length}."
-            )
-        if self.train_horizon_start_index < self.train_split_start_index:
-            raise ValueError("Train horizon must lie fully inside the train split.")
-        if self.validation_horizon_start_index < self.validation_split_start_index:
-            raise ValueError("Validation horizon must lie fully inside the validation split.")
-        if self.backtest_horizon_start_index < self.backtest_split_start_index:
-            raise ValueError("Backtest horizon must lie fully inside the backtest split.")
-
-        train_spec = self._build_window_spec(
-            split_name="train",
-            horizon_start_index=self.train_horizon_start_index,
-            horizon_end_index=self.train_horizon_end_index,
-            lookback_length=self.dynamic_train_lookback_length,
+        self.train_segment_raw_length = (
+            self.train_segment_end_index - self.train_segment_start_index
         )
-        validation_spec = self._build_window_spec(
-            split_name="validation",
-            horizon_start_index=self.validation_horizon_start_index,
-            horizon_end_index=self.validation_horizon_end_index,
-            lookback_length=self.dynamic_validation_lookback_length,
+        self.validation_segment_raw_length = (
+            self.validation_segment_end_index - self.validation_segment_start_index
         )
-        backtest_spec = self._build_window_spec(
-            split_name="backtest",
-            horizon_start_index=self.backtest_horizon_start_index,
-            horizon_end_index=self.backtest_horizon_end_index,
-            lookback_length=self.dynamic_backtest_lookback_length,
+        self.test_segment_raw_length = self.test_segment_end_index - self.test_segment_start_index
+
+        for split_name, raw_length in (
+            ("train", self.train_segment_raw_length),
+            ("validation", self.validation_segment_raw_length),
+            ("test", self.test_segment_raw_length),
+        ):
+            if raw_length < 2:
+                raise ValueError(
+                    f"{split_name}_segment_raw_length={raw_length} is too short. "
+                    "Each time split must contain at least 2 raw timestamps so that one-step "
+                    "target returns can be formed without future leakage."
+                )
+
+        self.train_segment_time_steps = self.train_segment_raw_length - 1
+        self.validation_segment_time_steps = self.validation_segment_raw_length - 1
+        self.test_segment_time_steps = self.test_segment_raw_length - 1
+        self.max_time_steps = max(
+            self.train_segment_time_steps,
+            self.validation_segment_time_steps,
+            self.test_segment_time_steps,
         )
 
-        self.train_window_specs = [train_spec]
-        self.validation_window_specs = [validation_spec]
-        self.backtest_window_specs = [backtest_spec]
-        self.backtest_window_spec = backtest_spec
-        self.model_lookback = max(
-            self.dynamic_train_lookback_length,
-            self.dynamic_validation_lookback_length,
-            self.dynamic_backtest_lookback_length,
-        )
+    def _read_scenario_frame(self, source_path: Path) -> pd.DataFrame:
+        available_columns = set(pq.read_schema(source_path).names)
+        columns = [column_name for column_name in LOADABLE_COLUMNS if column_name in available_columns]
+        return pd.read_parquet(source_path, columns=columns)
 
-    def _load(self) -> None:
-        header = pd.read_csv(self.csv_path, nrows=0).columns.tolist()
-        missing_columns = [column for column in REQUIRED_COLUMNS if column not in header]
+    def _load_scenario_arrays_uncached(self, scenario_record: ScenarioFileRecord) -> LoadedScenarioArrays:
+        source_path = Path(scenario_record.source_path)
+        frame = self._read_scenario_frame(source_path)
+        header = frame.columns.tolist()
+        missing_columns = [column for column in BASE_REQUIRED_COLUMNS if column not in frame.columns]
         if missing_columns:
-            raise ValueError(f"Missing required columns: {missing_columns}")
-        self.ignored_extra_columns = [column for column in header if column not in REQUIRED_COLUMNS]
-        self.loaded_stock_feature_columns = list(STOCK_FEATURE_COLUMNS)
-        self.loaded_market_feature_columns = list(MARKET_FEATURE_COLUMNS)
+            raise ValueError(f"Missing required columns in {source_path}: {missing_columns}")
+        if not self.ignored_extra_columns:
+            self.ignored_extra_columns = []
 
-        frame = pd.read_csv(self.csv_path, usecols=REQUIRED_COLUMNS)
+        has_return_column = OPTIONAL_RETURN_COLUMN in frame.columns
         for column in NUMERIC_COLUMNS:
-            frame[column] = _coerce_numeric_series(frame[column])
-        frame["time_index"] = frame["t"].map(_parse_time_label)
-        frame = frame.sort_values(["stock_id", "time_index"], kind="mergesort").reset_index(drop=True)
+            if column in frame.columns:
+                frame[column] = _coerce_numeric_series(frame[column])
+        frame["time_index"] = _parse_time_series(frame["t"])
 
         if frame.duplicated(["stock_id", "time_index"]).any():
-            raise ValueError("Panel contains duplicated (stock_id, t) rows.")
+            raise ValueError(f"Scenario contains duplicated (stock_id, t) rows: {source_path}")
 
-        self.stock_ids = sorted(frame["stock_id"].unique().tolist())
-        self.time_index = sorted(frame["time_index"].unique().tolist())
+        stock_ids = sorted(frame["stock_id"].unique().tolist())
+        time_index = sorted(frame["time_index"].unique().tolist())
 
-        if len(self.stock_ids) != self.parsed_n:
+        if len(stock_ids) != scenario_record.parsed_n:
             raise ValueError(
-                f"Parsed N={self.parsed_n} from file name but CSV contains {len(self.stock_ids)} stocks."
+                f"Parsed N={scenario_record.parsed_n} from file name but CSV contains {len(stock_ids)} stocks."
             )
-        if len(self.time_index) != self.parsed_t:
+        if len(time_index) != scenario_record.parsed_t:
             raise ValueError(
-                f"Parsed T={self.parsed_t} from file name but CSV contains {len(self.time_index)} time points."
+                f"Parsed T={scenario_record.parsed_t} from file name but CSV contains {len(time_index)} times."
             )
 
-        full_index = pd.MultiIndex.from_product(
-            [self.stock_ids, self.time_index],
-            names=["stock_id", "time_index"],
-        )
-        indexed = frame.set_index(["stock_id", "time_index"]).sort_index()
-        if len(indexed) != len(full_index):
-            raise ValueError("Panel is incomplete: row count does not match N * T.")
-        reindexed = indexed.reindex(full_index)
-        if reindexed.isna().any().any():
-            raise ValueError("Panel is incomplete: at least one (stock_id, t) combination is missing.")
-
-        ff3_consistency = frame.groupby("time_index")[MARKET_FEATURE_COLUMNS].nunique(dropna=False)
-        if (ff3_consistency > 1).any().any():
-            raise ValueError("FF3 factors are not identical across all stocks within the same day.")
-
-        stock_arrays = []
-        for column in STOCK_FEATURE_COLUMNS:
-            pivot = (
-                reindexed[column]
-                .unstack("time_index")
-                .reindex(index=self.stock_ids, columns=self.time_index)
-                .to_numpy(dtype=np.float32)
-            )
-            stock_arrays.append(pivot)
-        full_stock_features_raw = np.stack(stock_arrays, axis=-1)
-
-        self.market_features_raw = (
-            frame.groupby("time_index")[MARKET_FEATURE_COLUMNS]
-            .first()
-            .reindex(self.time_index)
-            .to_numpy(dtype=np.float32)
+        self._validate_reference_schema(
+            record=scenario_record,
+            stock_ids=stock_ids,
+            time_index=time_index,
         )
 
-        selected_stock_indices = self._resolve_selected_stock_indices()
-        self.selected_stock_ids = [self.stock_ids[index] for index in selected_stock_indices.tolist()]
-        self.stock_features_raw = full_stock_features_raw[selected_stock_indices]
-        self.price_array = self.stock_features_raw[..., -1].copy()
+        expected_row_count = scenario_record.parsed_n * scenario_record.parsed_t
+        if len(frame) != expected_row_count:
+            raise ValueError(f"Scenario is incomplete: {source_path}")
+        stock_position = pd.Categorical(
+            frame["stock_id"],
+            categories=self.reference_stock_ids,
+            ordered=True,
+        ).codes
+        if (stock_position < 0).any():
+            raise ValueError("Scenario contains unknown stock IDs compared with the reference universe.")
 
-        self._resolve_split_lengths()
+        time_values = frame["time_index"].to_numpy(dtype=np.int64, copy=False)
+        time_position = np.searchsorted(self.reference_time_index_array, time_values)
+        if (
+            (time_position >= len(self.reference_time_index_array)).any()
+            or not np.array_equal(self.reference_time_index_array[time_position], time_values)
+        ):
+            raise ValueError("Scenario contains unexpected time indices compared with the reference grid.")
 
-        self.stock_scaler = Standardizer().fit(
-            self.stock_features_raw[:, : self.train_days, :].reshape(-1, len(STOCK_FEATURE_COLUMNS))
+        linear_index = stock_position.astype(np.int64) * self.parsed_t + time_position.astype(np.int64)
+        coverage = np.bincount(linear_index, minlength=expected_row_count)
+        if coverage.shape[0] != expected_row_count or not np.all(coverage == 1):
+            raise ValueError(f"Scenario is incomplete after position mapping: {source_path}")
+
+        stock_feature_values = frame[STOCK_FEATURE_COLUMNS].to_numpy(dtype=np.float32, copy=True)
+        stock_feature_grid = np.empty((expected_row_count, len(STOCK_FEATURE_COLUMNS)), dtype=np.float32)
+        stock_feature_grid[linear_index] = stock_feature_values
+        stock_features_raw = stock_feature_grid.reshape(
+            self.parsed_n,
+            self.parsed_t,
+            len(STOCK_FEATURE_COLUMNS),
+        ).transpose(1, 0, 2)
+
+        market_values = frame[MARKET_FEATURE_COLUMNS].to_numpy(dtype=np.float32, copy=True)
+        market_grid = np.empty((expected_row_count, len(MARKET_FEATURE_COLUMNS)), dtype=np.float32)
+        market_grid[linear_index] = market_values
+        market_cube = market_grid.reshape(
+            self.parsed_n,
+            self.parsed_t,
+            len(MARKET_FEATURE_COLUMNS),
+        ).transpose(1, 0, 2)
+        if not np.allclose(market_cube, market_cube[:, :1, :], atol=0.0, rtol=0.0):
+            raise ValueError("FF3 factors are not identical across stocks within the same day.")
+        market_features_raw = market_cube[:, 0, :]
+
+        if has_return_column:
+            return_values = frame[OPTIONAL_RETURN_COLUMN].to_numpy(dtype=np.float32, copy=True)
+            return_grid = np.empty((expected_row_count,), dtype=np.float32)
+            return_grid[linear_index] = return_values
+            stock_returns_raw = return_grid.reshape(self.parsed_n, self.parsed_t).transpose(1, 0)
+        else:
+            price_array = stock_features_raw[..., -1]
+            stock_returns_raw = np.zeros_like(price_array)
+            stock_returns_raw[1:] = (price_array[1:] / price_array[:-1]) - 1.0
+
+        return LoadedScenarioArrays(
+            record=scenario_record,
+            stock_ids=stock_ids,
+            time_index=time_index,
+            stock_features_raw=stock_features_raw[:, self.selected_stock_indices, :],
+            market_features_raw=market_features_raw,
+            stock_returns_raw=stock_returns_raw[:, self.selected_stock_indices],
         )
-        self.market_scaler = Standardizer().fit(self.market_features_raw[: self.train_days])
-        self.stock_features_scaled = self.stock_scaler.transform(self.stock_features_raw)
-        self.market_features_scaled = self.market_scaler.transform(self.market_features_raw)
 
-        self._initialize_single_sample_windows()
+    def _load_scenario_arrays(self, scenario_record: ScenarioFileRecord) -> LoadedScenarioArrays:
+        cached = self._scenario_arrays_cache.get(scenario_record.scenario_id)
+        if cached is not None:
+            return cached
+        arrays = self._load_scenario_arrays_uncached(scenario_record)
+        self._scenario_arrays_cache[scenario_record.scenario_id] = arrays
+        return arrays
 
-        self.metadata = PanelMetadata(
-            source_path=str(self.csv_path),
+    def _fit_standardizers_on_train_scenarios(self) -> None:
+        stock_moments = RunningMoments(len(STOCK_FEATURE_COLUMNS))
+        market_moments = RunningMoments(len(MARKET_FEATURE_COLUMNS))
+
+        for scenario_record in self.train_scenario_records:
+            arrays = self._load_scenario_arrays(scenario_record)
+            train_stock_values = arrays.stock_features_raw[
+                self.train_segment_start_index : self.train_segment_end_index
+            ].reshape(-1, len(STOCK_FEATURE_COLUMNS))
+            train_market_values = arrays.market_features_raw[
+                self.train_segment_start_index : self.train_segment_end_index
+            ]
+            stock_moments.update(train_stock_values)
+            market_moments.update(train_market_values)
+
+        stock_mean, stock_std = stock_moments.finalize()
+        market_mean, market_std = market_moments.finalize()
+        self.stock_scaler.set_statistics(stock_mean, stock_std)
+        self.market_scaler.set_statistics(market_mean, market_std)
+
+    def _split_bounds_for(self, split_name: str) -> tuple[int, int]:
+        if split_name == "train":
+            return self.train_segment_start_index, self.train_segment_end_index
+        if split_name == "validation":
+            return self.validation_segment_start_index, self.validation_segment_end_index
+        if split_name == "test":
+            return self.test_segment_start_index, self.test_segment_end_index
+        raise ValueError(f"Unsupported split_name: {split_name}")
+
+    def _build_segment_record(
+        self,
+        arrays: LoadedScenarioArrays,
+        split_name: str,
+    ) -> ScenarioSegmentRecord:
+        raw_start, raw_end = self._split_bounds_for(split_name)
+        feature_stop = raw_end - 1
+        target_start = raw_start + 1
+
+        scaled_stock = self.stock_scaler.transform(
+            arrays.stock_features_raw.reshape(-1, len(STOCK_FEATURE_COLUMNS))
+        ).reshape(arrays.stock_features_raw.shape)
+        scaled_market = self.market_scaler.transform(arrays.market_features_raw)
+
+        x_stock = scaled_stock[raw_start:feature_stop]
+        x_market = scaled_market[raw_start:feature_stop]
+        r_stock = arrays.stock_returns_raw[target_start:raw_end]
+        feature_time_indices = np.asarray(arrays.time_index[raw_start:feature_stop], dtype=np.int64)
+        target_time_indices = np.asarray(arrays.time_index[target_start:raw_end], dtype=np.int64)
+        stock_indices = np.arange(len(self.selected_stock_ids), dtype=np.int64)
+
+        expected_time_steps = raw_end - raw_start - 1
+        assert x_stock.shape == (
+            expected_time_steps,
+            len(self.selected_stock_ids),
+            len(STOCK_FEATURE_COLUMNS),
+        )
+        assert x_market.shape == (expected_time_steps, len(MARKET_FEATURE_COLUMNS))
+        assert r_stock.shape == (expected_time_steps, len(self.selected_stock_ids))
+        assert feature_time_indices.shape == target_time_indices.shape == (expected_time_steps,)
+
+        return ScenarioSegmentRecord(
+            scenario_id=arrays.record.scenario_id,
+            source_path=arrays.record.source_path,
+            split_name=split_name,
+            feature_time_indices=feature_time_indices,
+            target_time_indices=target_time_indices,
+            x_stock=x_stock.astype(np.float32),
+            x_market=x_market.astype(np.float32),
+            r_stock=r_stock.astype(np.float32),
+            stock_indices=stock_indices,
+        )
+
+    def _materialize_scenario_segments(self) -> None:
+        split_map = {
+            "train": self.train_scenario_records,
+            "validation": self.validation_scenario_records,
+            "test": self.test_scenario_records,
+        }
+        target_lists = {
+            "train": self.train_segment_records,
+            "validation": self.validation_segment_records,
+            "test": self.test_segment_records,
+        }
+
+        for split_name, records in split_map.items():
+            for scenario_record in records:
+                arrays = self._load_scenario_arrays(scenario_record)
+                target_lists[split_name].append(self._build_segment_record(arrays, split_name))
+        self._scenario_arrays_cache.clear()
+
+    def _build_metadata(self) -> None:
+        self.metadata = ScenarioDatasetMetadata(
+            scenario_dir=str(self.scenario_dir),
+            scenario_glob=self.config.scenario_glob.format(state=self.state),
+            state=self.state,
+            total_scenarios_found=len(self.scenario_records),
+            num_train_scenarios=len(self.train_scenario_records),
+            num_validation_scenarios=len(self.validation_scenario_records),
+            num_test_scenarios=len(self.test_scenario_records),
+            train_scenarios=[record.scenario_id for record in self.train_scenario_records],
+            validation_scenarios=[record.scenario_id for record in self.validation_scenario_records],
+            test_scenarios=[record.scenario_id for record in self.test_scenario_records],
+            total_num_days=self.parsed_t,
+            train_segment_start_index=self.train_segment_start_index,
+            train_segment_end_index=self.train_segment_end_index - 1,
+            validation_segment_start_index=self.validation_segment_start_index,
+            validation_segment_end_index=self.validation_segment_end_index - 1,
+            test_segment_start_index=self.test_segment_start_index,
+            test_segment_end_index=self.test_segment_end_index - 1,
+            train_segment_raw_length=self.train_segment_raw_length,
+            validation_segment_raw_length=self.validation_segment_raw_length,
+            test_segment_raw_length=self.test_segment_raw_length,
+            train_segment_time_steps=self.train_segment_time_steps,
+            validation_segment_time_steps=self.validation_segment_time_steps,
+            test_segment_time_steps=self.test_segment_time_steps,
+            scenario_train_split_ratio=float(self.config.scenario_train_split_ratio),
+            scenario_validation_split_ratio=float(self.config.scenario_validation_split_ratio),
+            scenario_test_split_ratio=float(self.config.scenario_test_split_ratio),
+            scenario_batch_size=int(self.config.scenario_batch_size),
+            shuffle_train_scenarios=bool(self.config.shuffle_train_scenarios),
+            selected_num_stocks=len(self.selected_stock_ids),
             parsed_n=self.parsed_n,
             parsed_t=self.parsed_t,
-            csv_unique_stocks=len(self.stock_ids),
-            csv_unique_times=len(self.time_index),
-            total_num_days=self.parsed_t,
-            train_days=self.train_days,
-            validation_days=self.validation_days,
-            backtest_days=self.backtest_days,
-            train_split_ratio=float(self.config.train_split_ratio),
-            validation_split_ratio=float(self.config.validation_split_ratio),
-            backtest_split_ratio=float(self.config.backtest_split_ratio),
-            train_split_start_index=self.train_split_start_index,
-            train_split_end_index=self.train_split_end_index,
-            validation_split_start_index=self.validation_split_start_index,
-            validation_split_end_index=self.validation_split_end_index,
-            backtest_split_start_index=self.backtest_split_start_index,
-            backtest_split_end_index=self.backtest_split_end_index,
-            train_split_length=self.train_days,
-            validation_split_length=self.validation_days,
-            backtest_split_length=self.backtest_days,
-            analysis_horizon_days=self.analysis_horizon_days,
-            train_horizon_start_index=self.train_horizon_start_index,
-            train_horizon_end_index=self.train_horizon_end_index,
-            validation_horizon_start_index=self.validation_horizon_start_index,
-            validation_horizon_end_index=self.validation_horizon_end_index,
-            backtest_horizon_start_index=self.backtest_horizon_start_index,
-            backtest_horizon_end_index=self.backtest_horizon_end_index,
-            dynamic_train_lookback_length=self.dynamic_train_lookback_length,
-            dynamic_validation_lookback_length=self.dynamic_validation_lookback_length,
-            dynamic_backtest_lookback_length=self.dynamic_backtest_lookback_length,
-            model_lookback=self.model_lookback,
-            train_window_count=len(self.train_window_specs),
-            validation_window_count=len(self.validation_window_specs),
-            backtest_window_count=len(self.backtest_window_specs),
-            selected_num_stocks=len(self.selected_stock_ids),
-            effective_time_steps=self.parsed_t,
         )
 
     @property
@@ -490,61 +707,25 @@ class PortfolioPanelDataset:
     def num_times(self) -> int:
         return self.parsed_t
 
-    def get_window(self, window_spec: WindowSpec) -> dict[str, np.ndarray]:
-        lookback_start_index = window_spec.start_index
-        lookback_stop_index = lookback_start_index + window_spec.lookback_length
-        horizon_start_index = window_spec.horizon_start_index
-        horizon_end_index = window_spec.horizon_end_index
-
-        if lookback_start_index != 0:
-            raise ValueError("The fixed single-sample rule expects lookback_start_index=0.")
-        if lookback_stop_index != horizon_start_index:
-            raise ValueError(
-                "Lookback must end exactly where the horizon starts under the fixed single-sample rule."
-            )
-        if not (0 <= horizon_start_index < horizon_end_index < self.parsed_t):
-            raise IndexError(
-                "Invalid horizon indices for the requested window: "
-                f"start={horizon_start_index}, end={horizon_end_index}, total_num_days={self.parsed_t}."
-            )
-
-        x_stock = self.stock_features_scaled[:, lookback_start_index:lookback_stop_index, :]
-        x_market = self.market_features_scaled[lookback_start_index:lookback_stop_index]
-        entry_prices = self.price_array[:, horizon_start_index]
-        exit_prices = self.price_array[:, horizon_end_index]
-        r_stock = (exit_prices / entry_prices) - 1.0
-        stock_indices = np.arange(self.num_stocks, dtype=np.int64)
-
-        return {
-            "x_stock": x_stock.astype(np.float32),
-            "x_market": x_market.astype(np.float32),
-            "r_stock": r_stock.astype(np.float32),
-            "stock_indices": stock_indices,
-        }
+    def build_train_validation_test_datasets(
+        self,
+    ) -> tuple[ScenarioSegmentDataset, ScenarioSegmentDataset, ScenarioSegmentDataset]:
+        return (
+            ScenarioSegmentDataset(list(self.train_segment_records)),
+            ScenarioSegmentDataset(list(self.validation_segment_records)),
+            ScenarioSegmentDataset(list(self.test_segment_records)),
+        )
 
     def build_train_validation_backtest_datasets(
         self,
-    ) -> tuple[PortfolioWindowDataset, PortfolioWindowDataset, PortfolioWindowDataset]:
-        return (
-            PortfolioWindowDataset(self, list(self.train_window_specs)),
-            PortfolioWindowDataset(self, list(self.validation_window_specs)),
-            PortfolioWindowDataset(self, list(self.backtest_window_specs)),
-        )
+    ) -> tuple[ScenarioSegmentDataset, ScenarioSegmentDataset, ScenarioSegmentDataset]:
+        return self.build_train_validation_test_datasets()
 
-    def get_backtest_window(self) -> dict[str, np.ndarray]:
-        window = self.get_window(self.backtest_window_spec)
-        return {
-            "x_stock": window["x_stock"][np.newaxis, ...],
-            "x_market": window["x_market"][np.newaxis, ...],
-            "r_stock": window["r_stock"][np.newaxis, ...],
-            "stock_indices": window["stock_indices"][np.newaxis, ...],
-        }
-
-    def get_backtest_batch(self, device: torch.device | None = None) -> dict[str, torch.Tensor]:
-        batch = self.get_backtest_window()
-        tensor_batch = {
-            key: torch.as_tensor(value, device=device)
-            for key, value in batch.items()
-        }
-        tensor_batch["metadata"] = self.metadata.as_dict()
-        return tensor_batch
+    def get_split_dataset(self, split_name: str) -> ScenarioSegmentDataset:
+        if split_name == "train":
+            return ScenarioSegmentDataset(list(self.train_segment_records))
+        if split_name == "validation":
+            return ScenarioSegmentDataset(list(self.validation_segment_records))
+        if split_name == "test":
+            return ScenarioSegmentDataset(list(self.test_segment_records))
+        raise ValueError(f"Unsupported split_name: {split_name}")

@@ -129,6 +129,7 @@ def ensure_output_dirs(paths: PathsConfig) -> None:
         paths.metrics_dir,
         paths.logs_dir,
         paths.predictions_dir,
+        paths.status_dir,
     ):
         path.mkdir(parents=True, exist_ok=True)
 
@@ -136,18 +137,6 @@ def ensure_output_dirs(paths: PathsConfig) -> None:
 def save_json(payload: dict, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
-
-
-def state_id_from_csv_path(csv_path: Path) -> str:
-    name = csv_path.name
-    if not name.endswith(".csv"):
-        raise ValueError(f"Expected a .csv file, got: {csv_path}")
-    stem = csv_path.stem
-    suffix = "_panel_long"
-    if not stem.endswith(suffix):
-        raise ValueError(f"Expected file name ending with '{suffix}.csv', got: {csv_path.name}")
-    return stem[: -len(suffix)]
-
 
 def append_log(path: Path, message: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)

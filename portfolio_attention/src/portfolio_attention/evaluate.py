@@ -3,15 +3,23 @@
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 import re
 import sys
+from typing import Any
+
+os.environ.setdefault("MPLCONFIGDIR", str(Path("/tmp") / "portfolio_attention_matplotlib"))
 
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
+import pyarrow.parquet as pq
 import torch
+from torch.utils.data import DataLoader
 
 if __package__ is None or __package__ == "":
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -25,47 +33,39 @@ if __package__ is None or __package__ == "":
     from portfolio_attention.dataset import PortfolioPanelDataset
     from portfolio_attention.losses import sharpe_loss
     from portfolio_attention.model import PortfolioAttentionModel
-    from portfolio_attention.utils import (
-        ensure_output_dirs,
-        resolve_device,
-        save_json,
-        state_id_from_csv_path,
-    )
+    from portfolio_attention.utils import ensure_output_dirs, resolve_device, save_json
 else:
     from .config import DataConfig, EvaluationConfig, ModelConfig, PathsConfig, TrainConfig
     from .dataset import PortfolioPanelDataset
     from .losses import sharpe_loss
     from .model import PortfolioAttentionModel
-    from .utils import ensure_output_dirs, resolve_device, save_json, state_id_from_csv_path
+    from .utils import ensure_output_dirs, resolve_device, save_json
 
 REQUIRED_AUX_COLUMNS = ["stock_id", "t", "mu", "alpha", "epsilon_variance"]
 EXPORTED_TRAIN_CONFIG_KEYS = [
-    "batch_size",
     "num_epochs",
     "weight_decay",
     "grad_clip_norm",
     "early_stopping_patience",
 ]
+TERMINAL_OUTPUT_KEYS = [
+    "state",
+    "loss_name",
+    "num_holdout_scenarios",
+    "mean_final_return",
+    "std_final_return",
+    "median_final_return",
+    "worst_scenario_final_return",
+    "best_scenario_final_return",
+    "best_scenario_id",
+]
 
-TERMINAL_SUMMARY_KEYS = [
-    "portfolio_return",
-    "cash_weight",
-    "stopped_early",
-    "best_epoch",
-    "best_val_loss",
-    "source_path",
-]
-TERMINAL_METADATA_KEYS = [
-    "total_num_days",
-    "train_days",
-    "dynamic_backtest_lookback_length",
-    "dynamic_train_lookback_length",
-    "dynamic_validation_lookback_length",
-    "validation_days",
-    "backtest_days",
-    "analysis_horizon_days",
-]
-TERMINAL_OUTPUT_ORDER = TERMINAL_SUMMARY_KEYS + TERMINAL_METADATA_KEYS
+
+def _move_batch_to_device(batch: dict[str, Any], device: torch.device) -> dict[str, Any]:
+    return {
+        key: value.to(device) if isinstance(value, torch.Tensor) else value
+        for key, value in batch.items()
+    }
 
 
 def _parse_source_time_to_index(raw_value: object) -> int:
@@ -77,30 +77,53 @@ def _parse_source_time_to_index(raw_value: object) -> int:
     return int(raw_value)
 
 
-def _load_aux_frame(source_csv_path: Path) -> pd.DataFrame:
-    header = pd.read_csv(source_csv_path, nrows=0).columns.tolist()
+def _load_aux_frame(source_path: Path) -> pd.DataFrame:
+    header = pq.read_schema(source_path).names
     missing_columns = [column for column in REQUIRED_AUX_COLUMNS if column not in header]
     if missing_columns:
         raise ValueError(
-            "Evaluation export requires source CSV columns: "
+            "Evaluation export requires source panel columns: "
             f"{REQUIRED_AUX_COLUMNS}. Missing: {missing_columns}"
         )
 
-    aux_frame = pd.read_csv(source_csv_path, usecols=REQUIRED_AUX_COLUMNS)
+    aux_frame = pd.read_parquet(source_path, columns=REQUIRED_AUX_COLUMNS)
     aux_frame["analysis_time_index"] = aux_frame["t"].map(_parse_source_time_to_index)
     return aux_frame
 
 
-def _extract_exported_train_config(checkpoint: dict) -> dict[str, object]:
+def _cleanup_stale_prediction_artifacts(output_dir: Path, loss_name: str) -> None:
+    patterns = [
+        f"*_{loss_name}_holdout_predictions.json",
+        f"*_{loss_name}_allocation_pie.png",
+        f"*_{loss_name}_allocation_bar.png",
+        f"*_{loss_name}_all_stock_weights.csv",
+        f"*_{loss_name}_best_weight_trajectory.png",
+        f"{loss_name}_best_backtest_scenario_*.json",
+        f"{loss_name}_best_backtest_scenario_*.png",
+        f"{loss_name}_best_backtest_scenario_*.csv",
+    ]
+    for pattern in patterns:
+        for path in output_dir.glob(pattern):
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                pass
+
+
+def _extract_exported_train_config(checkpoint: dict[str, Any]) -> dict[str, object]:
     checkpoint_train_config = checkpoint.get("train_config", {})
-    return {
+    checkpoint_data_config = checkpoint.get("data_config", {})
+    exported = {
         key: checkpoint_train_config[key]
         for key in EXPORTED_TRAIN_CONFIG_KEYS
         if key in checkpoint_train_config
     }
+    if "scenario_batch_size" in checkpoint_data_config:
+        exported["scenario_batch_size"] = checkpoint_data_config["scenario_batch_size"]
+    return exported
 
 
-def _validate_checkpoint_metadata(checkpoint: dict, dataset: PortfolioPanelDataset) -> None:
+def _validate_checkpoint_metadata(checkpoint: dict[str, Any], dataset: PortfolioPanelDataset) -> None:
     checkpoint_metadata = checkpoint.get("metadata", {})
     checkpoint_num_stocks = checkpoint_metadata.get("selected_num_stocks")
     if checkpoint_num_stocks is not None and int(checkpoint_num_stocks) != dataset.num_stocks:
@@ -110,28 +133,8 @@ def _validate_checkpoint_metadata(checkpoint: dict, dataset: PortfolioPanelDatas
         )
 
 
-def _build_terminal_summary(payload: dict[str, object]) -> dict[str, object]:
-    summary = {
-        key: payload[key]
-        for key in TERMINAL_SUMMARY_KEYS
-        if key in payload
-    }
-    metadata = payload.get("metadata")
-    if isinstance(metadata, dict):
-        for key in TERMINAL_METADATA_KEYS:
-            if key in metadata:
-                summary[key] = metadata[key]
-    return summary
-
-
-def _format_terminal_summary(payload: dict[str, object]) -> str:
-    summary = _build_terminal_summary(payload)
-    lines = [
-        f"{key}: {summary[key]}"
-        for key in TERMINAL_OUTPUT_ORDER
-        if key in summary
-    ]
-    return "\n".join(lines)
+def _format_terminal_summary(payload: dict[str, Any]) -> str:
+    return "\n".join(f"{key}: {payload[key]}" for key in TERMINAL_OUTPUT_KEYS if key in payload)
 
 
 def _get_aux_lookup(aux_frame: pd.DataFrame) -> dict[tuple[str, int], dict[str, object]]:
@@ -148,7 +151,7 @@ def _get_aux_lookup(aux_frame: pd.DataFrame) -> dict[tuple[str, int], dict[str, 
         )
         raise ValueError(
             "Evaluation export found multiple source rows for the same "
-            "(stock_id, backtest_horizon_start_index) keys. "
+            "(stock_id, analysis_time_index) keys. "
             f"Examples: {duplicate_rows}"
         )
 
@@ -159,7 +162,6 @@ def _get_aux_lookup(aux_frame: pd.DataFrame) -> dict[tuple[str, int], dict[str, 
             "alpha": row.alpha,
             "epsilon_variance": row.epsilon_variance,
         }
-
     aux_frame.attrs["_position_lookup"] = lookup
     return lookup
 
@@ -167,19 +169,18 @@ def _get_aux_lookup(aux_frame: pd.DataFrame) -> dict[tuple[str, int], dict[str, 
 def enrich_positions(
     *,
     aux_frame: pd.DataFrame,
-    metadata: dict,
+    analysis_time_index: int,
     positions: list[dict[str, object]],
-) -> list[dict]:
-    analysis_time_index = int(metadata["backtest_horizon_start_index"])
+) -> list[dict[str, object]]:
     aux_lookup = _get_aux_lookup(aux_frame)
-    enriched: list[dict] = []
+    enriched: list[dict[str, object]] = []
     for rank, position in enumerate(positions, start=1):
         stock_id = str(position["stock_id"])
         match = aux_lookup.get((stock_id, analysis_time_index))
         if match is None:
             raise ValueError(
                 f"Evaluation export could not find exactly one source row for stock_id={stock_id} "
-                f"at backtest_horizon_start_index={analysis_time_index}."
+                f"at analysis_time_index={analysis_time_index}."
             )
         enriched.append(
             {
@@ -196,13 +197,14 @@ def enrich_positions(
 
 def enrich_top_k_positions(
     *,
-    source_csv_path: Path,
-    metadata: dict,
+    source_path: Path,
+    metadata: dict[str, Any],
     top_positions: list[dict[str, object]],
-) -> list[dict]:
+) -> list[dict[str, object]]:
+    analysis_time_index = int(metadata["analysis_time_index"])
     return enrich_positions(
-        aux_frame=_load_aux_frame(source_csv_path),
-        metadata=metadata,
+        aux_frame=_load_aux_frame(source_path),
+        analysis_time_index=analysis_time_index,
         positions=top_positions,
     )
 
@@ -211,7 +213,7 @@ def build_all_stock_positions(
     *,
     stock_ids: list[str],
     stock_weights: torch.Tensor,
-) -> list[dict]:
+) -> list[dict[str, object]]:
     positions = [
         {
             "stock_id": stock_id,
@@ -223,8 +225,8 @@ def build_all_stock_positions(
     return sorted(positions, key=lambda item: item["weight"], reverse=True)
 
 
-def group_allocations_by_state(all_stock_positions: list[dict]) -> list[dict]:
-    grouped: dict[tuple[str, str, str], dict] = {}
+def group_allocations_by_state(all_stock_positions: list[dict[str, object]]) -> list[dict[str, object]]:
+    grouped: dict[tuple[str, str, str], dict[str, object]] = {}
     for position in all_stock_positions:
         key = (
             str(position["mu"]),
@@ -239,21 +241,19 @@ def group_allocations_by_state(all_stock_positions: list[dict]) -> list[dict]:
                 "total_weight": 0.0,
                 "stock_count": 0,
             }
-        grouped[key]["total_weight"] += float(position["weight"])
-        grouped[key]["stock_count"] += 1
-
-    return sorted(grouped.values(), key=lambda item: item["total_weight"], reverse=True)
+        grouped[key]["total_weight"] = float(grouped[key]["total_weight"]) + float(position["weight"])
+        grouped[key]["stock_count"] = int(grouped[key]["stock_count"]) + 1
+    return sorted(grouped.values(), key=lambda item: float(item["total_weight"]), reverse=True)
 
 
 def append_cash_allocation(
-    grouped_allocations: list[dict],
+    grouped_allocations: list[dict[str, object]],
     cash_weight: float,
-) -> list[dict]:
+) -> list[dict[str, object]]:
     if cash_weight < 0.0:
         raise ValueError(f"cash_weight must be non-negative, received {cash_weight}.")
     if cash_weight == 0.0:
         return list(grouped_allocations)
-
     return [
         *grouped_allocations,
         {
@@ -267,12 +267,11 @@ def append_cash_allocation(
 
 
 def summarize_grouped_allocations(
-    grouped_allocations: list[dict],
+    grouped_allocations: list[dict[str, object]],
     top_n: int = 10,
-) -> list[dict]:
+) -> list[dict[str, object]]:
     if top_n <= 0:
         raise ValueError("top_n must be positive.")
-
     cash_allocations = [item for item in grouped_allocations if str(item["mu"]) == "Cash"]
     non_cash_allocations = [item for item in grouped_allocations if str(item["mu"]) != "Cash"]
     if len(non_cash_allocations) <= top_n:
@@ -291,7 +290,7 @@ def summarize_grouped_allocations(
 
 
 def render_allocation_pie_chart(
-    grouped_allocations: list[dict],
+    grouped_allocations: list[dict[str, object]],
     output_path: Path,
     title: str,
 ) -> None:
@@ -322,7 +321,7 @@ def render_allocation_pie_chart(
 
 
 def render_allocation_bar_chart(
-    grouped_allocations: list[dict],
+    grouped_allocations: list[dict[str, object]],
     output_path: Path,
     title: str,
 ) -> None:
@@ -348,7 +347,7 @@ def render_allocation_bar_chart(
 
 
 def save_all_stock_weights_csv(
-    all_stock_positions: list[dict],
+    all_stock_positions: list[dict[str, object]],
     output_path: Path,
 ) -> None:
     frame = pd.DataFrame(all_stock_positions)
@@ -360,23 +359,21 @@ def save_all_stock_weights_csv(
 def export_allocation_artifacts(
     *,
     aux_frame: pd.DataFrame,
-    metadata: dict[str, object],
+    analysis_time_index: int,
     stock_ids: list[str],
     stock_weights: torch.Tensor,
     cash_weight: float,
     portfolio_return: float,
-    paths: PathsConfig,
-    source_csv_path: Path,
+    output_dir: Path,
+    scenario_id: str,
+    artifact_stem: str,
     allocation_group_top_n: int,
     loss_name: str,
 ) -> dict[str, object]:
     all_stock_positions = enrich_positions(
         aux_frame=aux_frame,
-        metadata=metadata,
-        positions=build_all_stock_positions(
-            stock_ids=stock_ids,
-            stock_weights=stock_weights,
-        ),
+        analysis_time_index=analysis_time_index,
+        positions=build_all_stock_positions(stock_ids=stock_ids, stock_weights=stock_weights),
     )
     grouped_allocations = append_cash_allocation(
         group_allocations_by_state(all_stock_positions),
@@ -387,31 +384,19 @@ def export_allocation_artifacts(
         top_n=allocation_group_top_n,
     )
 
-    state_id = state_id_from_csv_path(source_csv_path)
-    scenario_dir = paths.get_scenario_predictions_dir(state_id)
     chart_title = (
-        f"Top {allocation_group_top_n} Allocation Groups + Others + Cash: {state_id}\n"
+        f"Top {allocation_group_top_n} Allocation Groups + Others + Cash: {scenario_id}\n"
         f"loss_name={loss_name} | portfolio_return={portfolio_return:.6f}"
     )
-    pie_chart_path = scenario_dir / f"{state_id}_{loss_name}_allocation_pie.png"
-    bar_chart_path = scenario_dir / f"{state_id}_{loss_name}_allocation_bar.png"
-    all_stock_weights_csv_path = scenario_dir / f"{state_id}_{loss_name}_all_stock_weights.csv"
+    pie_chart_path = output_dir / f"{artifact_stem}_allocation_pie.png"
+    bar_chart_path = output_dir / f"{artifact_stem}_allocation_bar.png"
+    all_stock_weights_csv_path = output_dir / f"{artifact_stem}_all_stock_weights.csv"
 
     save_all_stock_weights_csv(all_stock_positions, all_stock_weights_csv_path)
-    render_allocation_pie_chart(
-        grouped_allocations=grouped_allocations_top_n,
-        output_path=pie_chart_path,
-        title=chart_title,
-    )
-    render_allocation_bar_chart(
-        grouped_allocations=grouped_allocations_top_n,
-        output_path=bar_chart_path,
-        title=chart_title,
-    )
+    render_allocation_pie_chart(grouped_allocations_top_n, pie_chart_path, chart_title)
+    render_allocation_bar_chart(grouped_allocations_top_n, bar_chart_path, chart_title)
 
     return {
-        "source_path": state_id,
-        "loss_name": loss_name,
         "all_stock_weights": all_stock_positions,
         "all_stock_weights_csv": str(all_stock_weights_csv_path),
         "grouped_allocations": grouped_allocations,
@@ -423,6 +408,179 @@ def export_allocation_artifacts(
     }
 
 
+def render_weight_trajectory_chart(
+    *,
+    scenario_id: str,
+    stock_ids: list[str],
+    stock_weights: torch.Tensor,
+    cash_weights: torch.Tensor,
+    target_time_indices: torch.Tensor,
+    top_n: int,
+    output_path: Path,
+) -> None:
+    if stock_weights.ndim != 2:
+        raise ValueError("stock_weights must have shape [T, N].")
+    if cash_weights.ndim != 1:
+        raise ValueError("cash_weights must have shape [T].")
+
+    average_weights = stock_weights.mean(dim=0)
+    top_n = min(int(top_n), stock_weights.shape[1])
+    top_values, top_indices = torch.topk(average_weights, k=top_n)
+
+    fig, ax = plt.subplots(figsize=(14, 7))
+    x_axis = target_time_indices.detach().cpu().numpy()
+    for weight, index in zip(top_values.tolist(), top_indices.tolist()):
+        del weight
+        ax.plot(
+            x_axis,
+            stock_weights[:, index].detach().cpu().numpy(),
+            label=stock_ids[int(index)],
+        )
+    ax.plot(x_axis, cash_weights.detach().cpu().numpy(), label="Cash", linestyle="--", linewidth=2)
+    ax.set_xlabel("Target Time Index")
+    ax.set_ylabel("Weight")
+    ax.set_title(f"Best Holdout Scenario Weight Trajectory: {scenario_id}")
+    ax.legend(loc="upper right", fontsize=8)
+    fig.tight_layout()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
+def _build_per_scenario_payload(
+    *,
+    scenario_id: str,
+    source_path: Path,
+    loss_name: str,
+    checkpoint: dict[str, Any],
+    target_time_indices: torch.Tensor,
+    portfolio_returns: torch.Tensor,
+    stock_weights: torch.Tensor,
+    cash_weights: torch.Tensor,
+    dataset: PortfolioPanelDataset,
+    evaluation_config: EvaluationConfig,
+) -> dict[str, Any]:
+    path_returns_cpu = portfolio_returns.detach().cpu()
+    stock_weights_cpu = stock_weights.detach().cpu()
+    cash_weights_cpu = cash_weights.detach().cpu()
+    target_time_indices_cpu = target_time_indices.detach().cpu()
+
+    final_return = float(torch.prod(1.0 + path_returns_cpu).item() - 1.0)
+    final_cash_weight = float(cash_weights_cpu[-1].item())
+    mean_cash_weight = float(cash_weights_cpu.mean().item())
+    mean_step_return = float(path_returns_cpu.mean().item())
+    std_step_return = float(path_returns_cpu.std(unbiased=False).item())
+
+    top_k = min(5, dataset.num_stocks)
+    final_stock_weights = stock_weights_cpu[-1]
+    top_values, top_indices = torch.topk(final_stock_weights, k=top_k)
+    top_positions = [
+        {
+            "stock_id": dataset.selected_stock_ids[int(index)],
+            "weight": float(weight.item()),
+        }
+        for weight, index in zip(top_values, top_indices)
+    ]
+
+    analysis_time_index = int(target_time_indices_cpu[-1].item())
+    aux_frame = _load_aux_frame(source_path)
+    enriched_top_positions = enrich_positions(
+        aux_frame=aux_frame,
+        analysis_time_index=analysis_time_index,
+        positions=top_positions,
+    )
+
+    payload: dict[str, Any] = {
+        "scenario_id": scenario_id,
+        "source_path": str(source_path),
+        "loss_name": loss_name,
+        "state": dataset.state,
+        "evaluation_split": "holdout_test",
+        "train_config": _extract_exported_train_config(checkpoint),
+        "final_return": final_return,
+        "mean_step_return": mean_step_return,
+        "std_step_return": std_step_return,
+        "final_cash_weight": final_cash_weight,
+        "mean_cash_weight": mean_cash_weight,
+        "num_time_steps": int(path_returns_cpu.shape[0]),
+        "analysis_time_index": analysis_time_index,
+        "feature_time_start_index": int(target_time_indices_cpu[0].item()) - 1,
+        "feature_time_end_index": int(target_time_indices_cpu[-1].item()) - 1,
+        "target_time_start_index": int(target_time_indices_cpu[0].item()),
+        "target_time_end_index": int(target_time_indices_cpu[-1].item()),
+        "top_k_stock_weights": enriched_top_positions,
+        "allocation_group_top_n": evaluation_config.allocation_group_top_n,
+    }
+    if loss_name == "sharpe":
+        payload["sharpe_like"] = float((-sharpe_loss(path_returns_cpu).item()))
+
+    payload["_final_stock_weights_tensor"] = final_stock_weights
+    payload["_stock_weights_tensor"] = stock_weights_cpu
+    payload["_cash_weights_tensor"] = cash_weights_cpu
+    payload["_target_time_indices_tensor"] = target_time_indices_cpu
+    return payload
+
+
+def _export_best_backtest_payload(
+    *,
+    best_payload: dict[str, Any],
+    checkpoint: dict[str, Any],
+    dataset: PortfolioPanelDataset,
+    output_dir: Path,
+    evaluation_config: EvaluationConfig,
+    loss_name: str,
+) -> dict[str, Any]:
+    scenario_id = str(best_payload["scenario_id"])
+    source_path = Path(str(best_payload["source_path"]))
+    artifact_stem = f"{loss_name}_best_backtest_scenario"
+    aux_frame = _load_aux_frame(source_path)
+    allocation_payload = export_allocation_artifacts(
+        aux_frame=aux_frame,
+        analysis_time_index=int(best_payload["analysis_time_index"]),
+        stock_ids=dataset.selected_stock_ids,
+        stock_weights=best_payload["_final_stock_weights_tensor"],
+        cash_weight=float(best_payload["final_cash_weight"]),
+        portfolio_return=float(best_payload["final_return"]),
+        output_dir=output_dir,
+        scenario_id=scenario_id,
+        artifact_stem=artifact_stem,
+        allocation_group_top_n=evaluation_config.allocation_group_top_n,
+        loss_name=loss_name,
+    )
+
+    prediction_json_path = output_dir / f"{artifact_stem}_prediction.json"
+    exported_payload = {
+        key: value
+        for key, value in best_payload.items()
+        if not key.startswith("_")
+    }
+    exported_payload.update(
+        {
+            "best_backtest_scenario": True,
+            "train_config": _extract_exported_train_config(checkpoint),
+            "all_stock_weights": allocation_payload["all_stock_weights"],
+            "all_stock_weights_csv": allocation_payload["all_stock_weights_csv"],
+            "allocation_groups": allocation_payload["grouped_allocations"],
+            "grouped_allocations_top_n": allocation_payload["grouped_allocations_top_n"],
+            "allocation_groups_top_n_plus_others": allocation_payload[
+                "allocation_groups_top_n_plus_others"
+            ],
+            "allocation_group_top_n": allocation_payload["allocation_group_top_n"],
+            "allocation_pie_chart": allocation_payload["allocation_pie_chart"],
+            "allocation_bar_chart": allocation_payload["allocation_bar_chart"],
+        }
+    )
+    save_json(exported_payload, prediction_json_path)
+
+    return {
+        "payload": exported_payload,
+        "prediction_json_path": str(prediction_json_path),
+        "all_stock_weights_csv": str(allocation_payload["all_stock_weights_csv"]),
+        "allocation_pie_chart": str(allocation_payload["allocation_pie_chart"]),
+        "allocation_bar_chart": str(allocation_payload["allocation_bar_chart"]),
+    }
+
+
 def run_evaluation(
     data_config: DataConfig,
     paths: PathsConfig,
@@ -431,12 +589,18 @@ def run_evaluation(
     top_k: int = 5,
     evaluation_config: EvaluationConfig | None = None,
     loss_name: str | None = None,
-) -> dict:
+) -> dict[str, Any]:
+    del top_k
     ensure_output_dirs(paths)
     device = resolve_device(device_name)
     resolved_evaluation_config = evaluation_config or EvaluationConfig()
     dataset = PortfolioPanelDataset(data_config)
-    batch = dataset.get_backtest_batch(device=device)
+    holdout_dataset = dataset.get_split_dataset("test")
+    holdout_loader = DataLoader(
+        holdout_dataset,
+        batch_size=min(len(holdout_dataset), data_config.scenario_batch_size),
+        shuffle=False,
+    )
 
     resolved_checkpoint = checkpoint_path or (
         paths.checkpoints_dir / TrainConfig(loss_name=loss_name or "dsr").train_best_checkpoint_name
@@ -444,19 +608,17 @@ def run_evaluation(
     checkpoint = torch.load(resolved_checkpoint, map_location=device, weights_only=False)
     _validate_checkpoint_metadata(checkpoint, dataset)
 
-    # Filter model_config to remove legacy 'lookback' field if it exists,
-    # and extract max_lookback from checkpoint or metadata.
     checkpoint_model_config = checkpoint["model_config"]
     max_lookback = checkpoint.get("max_lookback")
     if max_lookback is None:
-        # Fallback to metadata or old lookback field in model_config
-        max_lookback = checkpoint.get("metadata", {}).get("model_lookback")
-        if max_lookback is None:
-            max_lookback = checkpoint_model_config.get("lookback", 60)
-
+        max_lookback = checkpoint.get("metadata", {}).get(
+            "train_segment_time_steps",
+            dataset.max_time_steps,
+        )
     filtered_config_dict = {
-        k: v for k, v in checkpoint_model_config.items()
-        if k in ModelConfig.__dataclass_fields__
+        key: value
+        for key, value in checkpoint_model_config.items()
+        if key in ModelConfig.__dataclass_fields__
     }
     model_config = ModelConfig(**filtered_config_dict)
     model = PortfolioAttentionModel(
@@ -467,110 +629,146 @@ def run_evaluation(
     model.load_state_dict(checkpoint["model_state_dict"])
     model.eval()
 
-    with torch.no_grad():
-        outputs = model(
-            batch["x_stock"],
-            batch["x_market"],
-            batch["stock_indices"],
-            target_returns=batch["r_stock"],
+    checkpoint_train_config = checkpoint.get("train_config", {})
+    checkpoint_loss_name = str(checkpoint_train_config.get("loss_name", loss_name or "unknown")).lower()
+    state_predictions_dir = paths.get_state_predictions_dir(dataset.state)
+    state_predictions_dir.mkdir(parents=True, exist_ok=True)
+    _cleanup_stale_prediction_artifacts(state_predictions_dir, checkpoint_loss_name)
+    legacy_holdout_dir = state_predictions_dir / "holdout_test"
+    if legacy_holdout_dir.exists():
+        _cleanup_stale_prediction_artifacts(legacy_holdout_dir, checkpoint_loss_name)
+
+    per_scenario_payloads: list[dict[str, Any]] = []
+    for raw_batch in holdout_loader:
+        batch = _move_batch_to_device(raw_batch, device)
+        with torch.no_grad():
+            outputs = model(
+                batch["x_stock"],
+                batch["x_market"],
+                batch["stock_indices"],
+                target_returns=batch["r_stock"],
+            )
+
+        if outputs["portfolio_return"] is None:
+            raise RuntimeError("Evaluation batch must provide target returns.")
+
+        path_returns = outputs["portfolio_return"]
+        stock_weights = outputs["stock_weights"]
+        cash_weights = outputs["cash_weight"]
+        scenario_ids = list(batch["scenario_id"])
+        source_paths = [Path(value) for value in batch["source_path"]]
+        target_time_indices = batch["target_time_indices"]
+
+        for index, scenario_id in enumerate(scenario_ids):
+            per_scenario_payloads.append(
+                _build_per_scenario_payload(
+                    scenario_id=scenario_id,
+                    source_path=source_paths[index],
+                    loss_name=checkpoint_loss_name,
+                    checkpoint=checkpoint,
+                    target_time_indices=target_time_indices[index],
+                    portfolio_returns=path_returns[index],
+                    stock_weights=stock_weights[index],
+                    cash_weights=cash_weights[index],
+                    dataset=dataset,
+                    evaluation_config=resolved_evaluation_config,
+                )
+            )
+
+    if len(per_scenario_payloads) != len(holdout_dataset):
+        raise RuntimeError(
+            "Holdout evaluation did not produce a per-scenario payload for every holdout scenario."
         )
 
-    stock_weights = outputs["stock_weights"][0].detach().cpu()
-    cash_weight = float(outputs["cash_weight"][0].detach().cpu().item())
-    portfolio_return = float(outputs["portfolio_return"][0].detach().cpu().item())
-    checkpoint_train_config = checkpoint.get("train_config", {})
-    checkpoint_loss_name = str(checkpoint_train_config.get("loss_name", "unknown")).lower()
-    top_k = min(top_k, dataset.num_stocks)
-    top_values, top_indices = torch.topk(stock_weights, k=top_k)
-    top_positions = [
-        {
-            "stock_id": dataset.selected_stock_ids[int(index)],
-            "weight": float(weight.item()),
-        }
-        for weight, index in zip(top_values, top_indices)
-    ]
-
-    source_csv_path = Path(data_config.csv_path)
-    aux_frame = _load_aux_frame(source_csv_path)
-    metadata = dataset.metadata.as_dict()
-    enriched_top_positions = enrich_positions(
-        aux_frame=aux_frame,
-        metadata=metadata,
-        positions=top_positions,
+    final_returns = np.asarray(
+        [float(item["final_return"]) for item in per_scenario_payloads],
+        dtype=np.float64,
     )
-    allocation_payload = export_allocation_artifacts(
-        aux_frame=aux_frame,
-        metadata=metadata,
+    best_index = int(final_returns.argmax())
+    worst_index = int(final_returns.argmin())
+    best_payload = per_scenario_payloads[best_index]
+    worst_payload = per_scenario_payloads[worst_index]
+
+    best_weight_plot_path = (
+        state_predictions_dir
+        / f"{checkpoint_loss_name}_best_backtest_scenario_weight_trajectory.png"
+    )
+    render_weight_trajectory_chart(
+        scenario_id=str(best_payload["scenario_id"]),
         stock_ids=dataset.selected_stock_ids,
-        stock_weights=stock_weights,
-        cash_weight=cash_weight,
-        portfolio_return=portfolio_return,
-        paths=paths,
-        source_csv_path=source_csv_path,
-        allocation_group_top_n=resolved_evaluation_config.allocation_group_top_n,
+        stock_weights=best_payload["_stock_weights_tensor"],
+        cash_weights=best_payload["_cash_weights_tensor"],
+        target_time_indices=best_payload["_target_time_indices_tensor"],
+        top_n=resolved_evaluation_config.best_scenario_weight_plot_top_n,
+        output_path=best_weight_plot_path,
+    )
+
+    best_export = _export_best_backtest_payload(
+        best_payload=best_payload,
+        checkpoint=checkpoint,
+        dataset=dataset,
+        output_dir=state_predictions_dir,
+        evaluation_config=resolved_evaluation_config,
         loss_name=checkpoint_loss_name,
     )
 
-    prediction_payload = {
-        "source_path": allocation_payload["source_path"],
+    per_scenario_rows = [
+        {
+            "scenario_id": item["scenario_id"],
+            "source_path": item["source_path"],
+            "final_return": item["final_return"],
+            "mean_step_return": item["mean_step_return"],
+            "std_step_return": item["std_step_return"],
+            "final_cash_weight": item["final_cash_weight"],
+            "mean_cash_weight": item["mean_cash_weight"],
+        }
+        for item in per_scenario_payloads
+    ]
+    per_scenario_csv_path = paths.metrics_dir / f"evaluation_metrics_{checkpoint_loss_name}_per_scenario.csv"
+    pd.DataFrame(per_scenario_rows).to_csv(per_scenario_csv_path, index=False)
+
+    aggregate_payload: dict[str, Any] = {
+        "state": dataset.state,
         "loss_name": checkpoint_loss_name,
-        "evaluation_split": "backtest",
-        "device": str(device),
+        "evaluation_split": "holdout_test",
+        "num_holdout_scenarios": len(per_scenario_payloads),
+        "mean_final_return": float(final_returns.mean()),
+        "std_final_return": float(final_returns.std(ddof=0)),
+        "median_final_return": float(np.median(final_returns)),
+        "worst_scenario_final_return": float(final_returns.min()),
+        "best_scenario_final_return": float(final_returns.max()),
+        "best_scenario_id": best_payload["scenario_id"],
+        "worst_scenario_id": worst_payload["scenario_id"],
+        "best_backtest_scenario_source_path": best_payload["source_path"],
+        "per_scenario_metrics_csv": str(per_scenario_csv_path),
+        "best_backtest_scenario_prediction_file": best_export["prediction_json_path"],
+        "best_backtest_scenario_all_stock_weights_csv": best_export["all_stock_weights_csv"],
+        "best_backtest_scenario_allocation_pie_chart": best_export["allocation_pie_chart"],
+        "best_backtest_scenario_allocation_bar_chart": best_export["allocation_bar_chart"],
+        "best_backtest_scenario_weight_trajectory_chart": str(best_weight_plot_path),
+        "best_scenario_weight_trajectory_chart": str(best_weight_plot_path),
         "train_config": _extract_exported_train_config(checkpoint),
-        "portfolio_return": portfolio_return,
-        "average_portfolio_return": portfolio_return,
-        "cash_weight": cash_weight,
-        "average_cash_weight": cash_weight,
-        "metadata": {
-            key: value
-            for key, value in dataset.metadata.as_dict().items()
-            if key != "source_path"
-        },
-        "top_k_stock_weights": enriched_top_positions,
+        "metadata": dataset.metadata.as_dict(),
     }
-    if checkpoint_loss_name == "sharpe":
-        prediction_payload["sharpe_like"] = float(
-            (-sharpe_loss(outputs["portfolio_return"]).detach().cpu().item())
-        )
-    metrics_payload = {
-        **prediction_payload,
-        "all_stock_weights": allocation_payload["all_stock_weights"],
-        "all_stock_weights_csv": allocation_payload["all_stock_weights_csv"],
-        "allocation_groups": allocation_payload["grouped_allocations"],
-        "grouped_allocations_top_n": allocation_payload["grouped_allocations_top_n"],
-        "allocation_groups_top_n_plus_others": allocation_payload["allocation_groups_top_n_plus_others"],
-        "allocation_group_top_n": allocation_payload["allocation_group_top_n"],
-        "allocation_pie_chart": allocation_payload["allocation_pie_chart"],
-        "allocation_bar_chart": allocation_payload["allocation_bar_chart"],
-    }
-    state_id = state_id_from_csv_path(data_config.csv_path)
-    scenario_dir = paths.get_scenario_predictions_dir(state_id)
-    save_json(
-        prediction_payload,
-        scenario_dir / f"{state_id}_{checkpoint_loss_name}_predictions.json",
-    )
-    save_json(metrics_payload, paths.metrics_dir / f"evaluation_metrics_{checkpoint_loss_name}.json")
-    return prediction_payload
+    save_json(aggregate_payload, paths.metrics_dir / f"evaluation_metrics_{checkpoint_loss_name}.json")
+
+    for item in per_scenario_payloads:
+        item.pop("_final_stock_weights_tensor", None)
+        item.pop("_stock_weights_tensor", None)
+        item.pop("_cash_weights_tensor", None)
+        item.pop("_target_time_indices_tensor", None)
+
+    return aggregate_payload
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run evaluation for portfolio_attention.")
-    parser.add_argument("--data-path", type=Path, default=None)
     parser.add_argument("--checkpoint", type=Path, default=None)
     parser.add_argument("--device", default="auto")
-    parser.add_argument("--top-k", type=int, default=5)
-    parser.add_argument("--num-stocks", type=int, default=None)
     parser.add_argument(
         "--loss",
         default=None,
-        choices=[
-            "return",
-            "sharpe",
-            "dsr",
-            "sortino",
-            "mdd",
-            "cvar",
-        ],
+        choices=["return", "sharpe", "dsr", "sortino", "mdd", "cvar"],
     )
     return parser
 
@@ -578,17 +776,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
 def main() -> None:
     args = build_arg_parser().parse_args()
     paths = PathsConfig()
-    default_data_config = DataConfig()
-    data_config = DataConfig(
-        csv_path=args.data_path or default_data_config.csv_path,
-        num_stocks=args.num_stocks,
-    )
     payload = run_evaluation(
-        data_config=data_config,
+        data_config=DataConfig(),
         paths=paths,
         checkpoint_path=args.checkpoint,
         device_name=args.device,
-        top_k=args.top_k,
         loss_name=args.loss,
     )
     print(_format_terminal_summary(payload))

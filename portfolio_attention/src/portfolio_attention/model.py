@@ -1,4 +1,4 @@
-"""Portfolio attention model."""
+"""Scenario-aware portfolio model."""
 
 from __future__ import annotations
 
@@ -11,10 +11,22 @@ from .config import ModelConfig
 
 
 class PortfolioAttentionModel(nn.Module):
-    """Minimal portfolio model with separate stock and market temporal branches.
+    """Portfolio model that preserves scenario and time structure.
 
-    Time position is applied as `x_t = w_t + p_t`.
-    Stock identity position is applied as `x_{s,t} = [z_{s,t}; e_s]`.
+    Expected tensor layout:
+    - `x_stock`: [S, T, N, F_stock]
+    - `x_market`: [S, T, F_market]
+    - `stock_indices`: [S, N]
+    - `target_returns`: [S, T, N]
+
+    The forward pass keeps `S` (scenario) and `T` (time) separate and returns:
+    - `stock_weights`: [S, T, N]
+    - `cash_weight`: [S, T]
+    - `portfolio_return`: [S, T]
+
+    To avoid future leakage, the model uses only the current step and causal
+    running summaries up to the current step. It does not flatten scenario and
+    time into a single path.
     """
 
     def __init__(self, config: ModelConfig, *, num_stocks: int, max_lookback: int) -> None:
@@ -23,84 +35,52 @@ class PortfolioAttentionModel(nn.Module):
             raise ValueError("num_stocks must be positive before model construction.")
         if max_lookback <= 0:
             raise ValueError("max_lookback must be positive before model construction.")
-        attention_input_dim = config.cross_sectional_dim + config.stock_id_embedding_dim
-        if attention_input_dim % config.attention_heads != 0:
-            raise ValueError("attention_input_dim must be divisible by attention_heads.")
 
         self.config = config
         self.num_stocks = num_stocks
         self.max_lookback = max_lookback
-        self.time_position_mode = "add"
+        self.time_position_mode = "causal_running_mean"
         self.id_position_mode = "concat"
 
-        self.stock_input_proj = nn.Linear(config.stock_feature_dim, config.stock_temporal_dim)
+        self.stock_input_proj = nn.Linear(config.stock_feature_dim, config.cross_sectional_dim)
         self.market_input_proj = nn.Linear(config.market_feature_dim, config.market_temporal_dim)
-        self.stock_time_position = nn.Embedding(max_lookback, config.stock_temporal_dim)
-        self.market_time_position = nn.Embedding(max_lookback, config.market_temporal_dim)
-
-        stock_temporal_heads = 2 if config.stock_temporal_dim % 2 == 0 else 1
-        market_temporal_heads = 2 if config.market_temporal_dim % 2 == 0 else 1
-
-        stock_encoder_layer = nn.TransformerEncoderLayer(
-            d_model=config.stock_temporal_dim,
-            nhead=stock_temporal_heads,
-            dim_feedforward=max(32, config.stock_temporal_dim * 2),
-            dropout=config.dropout,
-            batch_first=True,
-        )
-        market_encoder_layer = nn.TransformerEncoderLayer(
-            d_model=config.market_temporal_dim,
-            nhead=market_temporal_heads,
-            dim_feedforward=max(32, config.market_temporal_dim * 2),
-            dropout=config.dropout,
-            batch_first=True,
-        )
-        self.stock_temporal_encoder = nn.TransformerEncoder(stock_encoder_layer, num_layers=1)
-        self.market_temporal_encoder = nn.TransformerEncoder(market_encoder_layer, num_layers=1)
-
-        self.fusion_projection = nn.Linear(
-            config.stock_temporal_dim + config.market_temporal_dim,
-            config.cross_sectional_dim,
-        )
         self.stock_id_embedding = nn.Embedding(num_stocks, config.stock_id_embedding_dim)
-        self.stock_attention = nn.MultiheadAttention(
-            embed_dim=attention_input_dim,
-            num_heads=config.attention_heads,
-            dropout=config.dropout,
-            batch_first=True,
+
+        stock_feature_width = (
+            config.cross_sectional_dim * 2
+            + config.market_temporal_dim * 2
+            + config.stock_id_embedding_dim
         )
-        self.stock_head = nn.Linear(attention_input_dim, 1)
-        self.cash_head = nn.Linear(attention_input_dim, 1)
-        self.post_attention_norm = nn.LayerNorm(attention_input_dim)
+        cash_feature_width = (
+            config.cross_sectional_dim * 2 + config.market_temporal_dim * 2
+        )
+        cash_hidden_dim = max(4, config.market_temporal_dim)
 
-    def apply_time_position(self, temporal_content: torch.Tensor, branch: str) -> torch.Tensor:
-        """Apply `x_t = w_t + p_t`."""
+        self.stock_score = nn.Sequential(
+            nn.Linear(stock_feature_width, config.cross_sectional_dim),
+            nn.GELU(),
+            nn.Dropout(config.dropout),
+            nn.Linear(config.cross_sectional_dim, 1),
+        )
+        self.cash_score = nn.Sequential(
+            nn.Linear(cash_feature_width, cash_hidden_dim),
+            nn.GELU(),
+            nn.Dropout(config.dropout),
+            nn.Linear(cash_hidden_dim, 1),
+        )
 
-        if temporal_content.ndim != 3:
-            raise ValueError("temporal_content must have shape [batch_like, lookback, hidden].")
-        sequence_length = temporal_content.shape[1]
-        if sequence_length > self.max_lookback:
-            raise ValueError(
-                f"Input sequence length {sequence_length} exceeds model max_lookback {self.max_lookback}."
-            )
-        positions = torch.arange(sequence_length, device=temporal_content.device)
-        if branch == "stock":
-            pos_embedding = self.stock_time_position(positions)
-        elif branch == "market":
-            pos_embedding = self.market_time_position(positions)
-        else:
-            raise ValueError(f"Unsupported branch: {branch}")
-        return temporal_content + pos_embedding.unsqueeze(0)
-
-    def append_stock_identity(
-        self,
-        stock_representation: torch.Tensor,
-        stock_indices: torch.Tensor,
-    ) -> torch.Tensor:
-        """Apply `x_{s,t} = [z_{s,t}; e_s]` in the cross-sectional feature dimension."""
-
-        identity = self.stock_id_embedding(stock_indices)
-        return torch.cat([stock_representation, identity], dim=-1)
+    @staticmethod
+    def _causal_running_mean(values: torch.Tensor) -> torch.Tensor:
+        if values.ndim < 2:
+            raise ValueError("Expected at least 2 dimensions for causal running mean.")
+        steps = torch.arange(
+            1,
+            values.shape[1] + 1,
+            device=values.device,
+            dtype=values.dtype,
+        )
+        view_shape = [1, values.shape[1]] + [1] * (values.ndim - 2)
+        return values.cumsum(dim=1) / steps.view(*view_shape)
 
     def forward(
         self,
@@ -110,71 +90,78 @@ class PortfolioAttentionModel(nn.Module):
         target_returns: torch.Tensor | None = None,
     ) -> dict[str, Any]:
         if x_stock.ndim != 4:
-            raise ValueError("x_stock must have shape [B, N, L, F_stock].")
+            raise ValueError("x_stock must have shape [S, T, N, F_stock].")
         if x_market.ndim != 3:
-            raise ValueError("x_market must have shape [B, L, 3].")
+            raise ValueError("x_market must have shape [S, T, F_market].")
         if stock_indices.ndim != 2:
-            raise ValueError("stock_indices must have shape [B, N].")
+            raise ValueError("stock_indices must have shape [S, N].")
 
-        batch_size, num_stocks, lookback, stock_feature_dim = x_stock.shape
+        num_scenarios, time_steps, num_stocks, stock_feature_dim = x_stock.shape
         assert stock_feature_dim == self.config.stock_feature_dim
-        assert x_market.shape == (batch_size, lookback, self.config.market_feature_dim)
-        assert stock_indices.shape == (batch_size, num_stocks)
+        assert x_market.shape == (num_scenarios, time_steps, self.config.market_feature_dim)
+        assert stock_indices.shape == (num_scenarios, num_stocks)
+        if time_steps > self.max_lookback:
+            raise ValueError(
+                f"Received time_steps={time_steps}, but model was constructed for max_lookback={self.max_lookback}."
+            )
         if num_stocks > self.num_stocks:
             raise ValueError(
-                f"Received batch with num_stocks={num_stocks}, but model was constructed for {self.num_stocks} stocks."
+                f"Received num_stocks={num_stocks}, but model was constructed for {self.num_stocks}."
             )
 
-        stock_flat = x_stock.reshape(batch_size * num_stocks, lookback, stock_feature_dim)
-        stock_content = self.stock_input_proj(stock_flat)
-        stock_sequence = self.apply_time_position(stock_content, branch="stock")
-        stock_temporal = self.stock_temporal_encoder(stock_sequence)
-        z_i = stock_temporal.mean(dim=1).reshape(batch_size, num_stocks, self.config.stock_temporal_dim)
+        stock_current = self.stock_input_proj(x_stock)
+        stock_running = self._causal_running_mean(stock_current)
+        market_current = self.market_input_proj(x_market)
+        market_running = self._causal_running_mean(market_current)
 
-        market_content = self.market_input_proj(x_market)
-        market_sequence = self.apply_time_position(market_content, branch="market")
-        market_temporal = self.market_temporal_encoder(market_sequence)
-        market_summary = market_temporal.mean(dim=1)
+        market_current_expanded = market_current.unsqueeze(2).expand(-1, -1, num_stocks, -1)
+        market_running_expanded = market_running.unsqueeze(2).expand(-1, -1, num_stocks, -1)
+        stock_identity = self.stock_id_embedding(stock_indices).unsqueeze(1).expand(
+            -1, time_steps, -1, -1
+        )
 
-        fused = torch.cat(
-            [z_i, market_summary.unsqueeze(1).expand(-1, num_stocks, -1)],
+        stock_features = torch.cat(
+            [
+                stock_current,
+                stock_running,
+                market_current_expanded,
+                market_running_expanded,
+                stock_identity,
+            ],
             dim=-1,
         )
-        projected = self.fusion_projection(fused)
-        stock_tokens = self.append_stock_identity(projected, stock_indices)
+        stock_logits = self.stock_score(stock_features).squeeze(-1)
 
-        attention_out, attention_weights = self.stock_attention(
-            stock_tokens,
-            stock_tokens,
-            stock_tokens,
-            need_weights=True,
-            average_attn_weights=False,
+        pooled_stock_current = stock_current.mean(dim=2)
+        pooled_stock_running = stock_running.mean(dim=2)
+        cash_features = torch.cat(
+            [pooled_stock_current, pooled_stock_running, market_current, market_running],
+            dim=-1,
         )
-        attention_out = self.post_attention_norm(attention_out + stock_tokens)
+        cash_logit = self.cash_score(cash_features).squeeze(-1)
 
-        stock_logits = self.stock_head(attention_out).squeeze(-1)
-        pooled_stock = attention_out.mean(dim=1)
-        cash_logit = self.cash_head(pooled_stock).squeeze(-1)
         allocation_logits = torch.cat([stock_logits, cash_logit.unsqueeze(-1)], dim=-1)
         allocation = torch.softmax(allocation_logits, dim=-1)
-        stock_weights = allocation[:, :-1]
-        cash_weight = allocation[:, -1]
+        stock_weights = allocation[..., :-1]
+        cash_weight = allocation[..., -1]
 
         portfolio_return = None
         if target_returns is not None:
-            if target_returns.shape != (batch_size, num_stocks):
-                raise ValueError("target_returns must have shape [B, N].")
+            expected_shape = (num_scenarios, time_steps, num_stocks)
+            if target_returns.shape != expected_shape:
+                raise ValueError(
+                    f"target_returns must have shape {expected_shape}, received {tuple(target_returns.shape)}."
+                )
             portfolio_return = (stock_weights * target_returns).sum(dim=-1)
 
         debug_info = {
             "time_position_mode": self.time_position_mode,
             "id_position_mode": self.id_position_mode,
-            "stock_attention_token_count": int(stock_tokens.shape[1]),
-            "cash_token_in_attention": False,
-            "stock_temporal_shape": tuple(stock_temporal.shape),
-            "market_temporal_shape": tuple(market_temporal.shape),
-            "fused_shape": tuple(fused.shape),
-            "attention_weight_shape": tuple(attention_weights.shape),
+            "stock_current_shape": tuple(stock_current.shape),
+            "stock_running_shape": tuple(stock_running.shape),
+            "market_current_shape": tuple(market_current.shape),
+            "market_running_shape": tuple(market_running.shape),
+            "stock_feature_shape": tuple(stock_features.shape),
         }
 
         return {

@@ -8,24 +8,36 @@ from typing import Literal
 import torch
 
 
+def _coerce_portfolio_returns(portfolio_returns: torch.Tensor) -> torch.Tensor:
+    if portfolio_returns.numel() == 0:
+        raise ValueError("portfolio_returns must not be empty.")
+    if portfolio_returns.ndim == 1:
+        return portfolio_returns.unsqueeze(0)
+    if portfolio_returns.ndim != 2:
+        raise ValueError(
+            "portfolio_returns must have shape [num_scenarios_in_batch, time_steps]. "
+            f"Received {tuple(portfolio_returns.shape)}."
+        )
+    return portfolio_returns
+
+
+def _terminal_return_per_scenario(
+    portfolio_returns: torch.Tensor,
+    mode: Literal["multiplicative", "additive"] = "multiplicative",
+) -> torch.Tensor:
+    portfolio_returns = _coerce_portfolio_returns(portfolio_returns)
+    if mode == "multiplicative":
+        return torch.prod(1 + portfolio_returns, dim=1) - 1
+    return torch.sum(portfolio_returns, dim=1)
+
+
 # 計算投資組合整段路徑的最終報酬損失，回傳負值供最小化。
 def return_loss(
     portfolio_returns: torch.Tensor,
     mode: Literal["multiplicative", "additive"] = "multiplicative",
 ) -> torch.Tensor:
     """計算整段投資組合報酬的負終值損失。"""
-    if portfolio_returns.numel() == 0:
-        raise ValueError("portfolio_returns must not be empty.")  # 空張量直接報錯
-
-    # 統一轉成 2D [B, T]，若輸入是 1D [T] 就視為單一 batch
-    if portfolio_returns.ndim == 1:
-        portfolio_returns = portfolio_returns.unsqueeze(0)  # [T] -> [1, T]
-
-    if mode == "multiplicative":
-        terminal_returns = torch.prod(1 + portfolio_returns, dim=1) - 1  # 複利終值 = ∏(1+r)-1
-    else:
-        terminal_returns = torch.sum(portfolio_returns, dim=1)  # 加法終值 = Σr
-
+    terminal_returns = _terminal_return_per_scenario(portfolio_returns, mode=mode)
     return -terminal_returns.mean()  # 取負號，讓最佳化器用最小化方式最大化報酬
 
 
@@ -38,10 +50,9 @@ def sharpe_loss(
     fallback_mode: Literal["multiplicative", "additive"] = "multiplicative",
 ) -> torch.Tensor:
     """計算整段投資組合報酬的負 Sharpe Ratio 損失。"""
-    if portfolio_returns.ndim == 1:
-        portfolio_returns = portfolio_returns.unsqueeze(0)  # [T] -> [1, T]
+    portfolio_returns = _coerce_portfolio_returns(portfolio_returns)
 
-    batch_size, time_steps = portfolio_returns.shape  # 取得 batch 與時間長度
+    _, time_steps = portfolio_returns.shape  # 取得 batch 與時間長度
 
     if time_steps < min_time_steps:
         warnings.warn(
@@ -56,12 +67,9 @@ def sharpe_loss(
     std_ret = excess_returns.std(dim=1, unbiased=True)  # 每條路徑的樣本標準差
 
     sharpe = mean_ret / (std_ret + eps)  # Sharpe = 平均報酬 / 波動
-
-    valid_mask = std_ret > eps  # 過濾幾乎沒有波動的無效樣本
-    if not valid_mask.any():
-        return return_loss(portfolio_returns, mode=fallback_mode)  # 全部都無效時退回報酬損失
-
-    return -sharpe[valid_mask].mean()  # 只對有效樣本取平均並加負號
+    fallback_losses = -_terminal_return_per_scenario(portfolio_returns, mode=fallback_mode)
+    scenario_losses = torch.where(std_ret > eps, -sharpe, fallback_losses)
+    return scenario_losses.mean()
 
 
 # 依序更新 A/B 統計量來計算 Differential Sharpe Ratio 損失。
@@ -74,8 +82,7 @@ def differential_sharpe_loss(
     reduction: Literal["mean", "sum", "last"] = "mean",
 ) -> torch.Tensor:
     """計算整段投資組合報酬的負 Differential Sharpe Ratio 損失。"""
-    if portfolio_returns.ndim == 1:
-        portfolio_returns = portfolio_returns.unsqueeze(0)  # [T] -> [1, T]
+    portfolio_returns = _coerce_portfolio_returns(portfolio_returns)
 
     batch_size, T = portfolio_returns.shape
     device = portfolio_returns.device  # 保持中間張量與輸入在同一裝置
@@ -118,10 +125,9 @@ def sortino_loss(
     fallback_mode: Literal["multiplicative", "additive"] = "multiplicative",
 ) -> torch.Tensor:
     """計算整段投資組合報酬的負 Sortino Ratio 損失。"""
-    if portfolio_returns.ndim == 1:
-        portfolio_returns = portfolio_returns.unsqueeze(0)  # [T] -> [1, T]
+    portfolio_returns = _coerce_portfolio_returns(portfolio_returns)
 
-    batch_size, time_steps = portfolio_returns.shape
+    _, time_steps = portfolio_returns.shape
     if time_steps < min_time_steps:
         return return_loss(portfolio_returns, mode=fallback_mode)  # 時間步不足時退回報酬損失
 
@@ -142,8 +148,7 @@ def max_drawdown_loss(
     eps: float = 1e-8,
 ) -> torch.Tensor:
     """計算投資組合路徑的平均最大回撤風險。"""
-    if portfolio_returns.ndim == 1:
-        portfolio_returns = portfolio_returns.unsqueeze(0)  # [T] -> [1, T]
+    portfolio_returns = _coerce_portfolio_returns(portfolio_returns)
 
     if mode == "multiplicative":
         equity = torch.cumprod(1 + portfolio_returns, dim=1)  # 用複利方式累積資產曲線
@@ -163,8 +168,7 @@ def cvar_loss(
     alpha: float = 0.05,
 ) -> torch.Tensor:
     """計算投資組合報酬分布的平均 CVaR 風險。"""
-    if portfolio_returns.ndim == 1:
-        portfolio_returns = portfolio_returns.unsqueeze(0)  # [T] -> [1, T]
+    portfolio_returns = _coerce_portfolio_returns(portfolio_returns)
 
     losses = -portfolio_returns  # 報酬轉損失，方便計算尾部風險
     batch_size, T = losses.shape
