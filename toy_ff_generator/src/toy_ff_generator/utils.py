@@ -4,36 +4,14 @@ import os
 from pathlib import Path
 from typing import Sequence
 
-import matplotlib
 import numpy as np
 import pandas as pd
 
 from toy_ff_generator.characteristics import FIRM_CHARACTERISTIC_COLUMNS
 
-matplotlib.use("Agg")
+os.environ.setdefault("MPLCONFIGDIR", str(Path("/tmp") / "toy_ff_generator_matplotlib"))
 
-import matplotlib.pyplot as plt
-
-PANEL_LONG_PERCENT_COLUMNS = (
-    "alpha",
-    "epsilon_variance",
-    "MKT",
-    "SMB",
-    "HML",
-    "epsilon",
-    "raw_return",
-    "return",
-)
-
-PANEL_LONG_ROUNDED_COLUMNS = (
-    "characteristic_1",
-    "characteristic_2",
-    "characteristic_3",
-    "beta_mkt",
-    "beta_smb",
-    "beta_hml",
-    "price",
-)
+_PYPLOT_MODULE = None
 
 
 def set_random_seed(seed: int) -> np.random.Generator:
@@ -79,23 +57,34 @@ def build_firm_characteristics_excel_view(
     return excel_view
 
 
-def _format_panel_long_for_csv(panel_long_df: pd.DataFrame) -> pd.DataFrame:
-    formatted_df = panel_long_df.copy()
-    for column_name in PANEL_LONG_ROUNDED_COLUMNS:
-        if column_name in formatted_df.columns:
-            formatted_df[column_name] = formatted_df[column_name].round(4)
-    for column_name in PANEL_LONG_PERCENT_COLUMNS:
-        if column_name in formatted_df.columns:
-            formatted_df[column_name] = formatted_df[column_name].map(
-                lambda value: f"{float(value) * 100:.3f}%"
-            )
-    return formatted_df
+def _to_time_index(raw_value: object) -> int:
+    if isinstance(raw_value, str):
+        normalized = raw_value.strip()
+        if normalized.startswith("t_"):
+            return int(normalized.split("_", 1)[1])
+        return int(normalized)
+    return int(raw_value)
+
+
+def prepare_panel_long_for_parquet(panel_long_df: pd.DataFrame) -> pd.DataFrame:
+    prepared_df = panel_long_df.copy()
+    prepared_df["t"] = prepared_df["t"].map(_to_time_index).astype("int64")
+    return prepared_df
 
 
 def build_market_index_df(
     panel_long_df: pd.DataFrame,
-    time_columns: Sequence[str],
+    time_indices: Sequence[int] | None = None,
 ) -> pd.DataFrame:
+    if time_indices is None:
+        time_index_values = (
+            pd.Index(pd.to_numeric(panel_long_df["t"], errors="raise"))
+            .sort_values()
+            .unique()
+            .tolist()
+        )
+    else:
+        time_index_values = [int(value) for value in time_indices]
     market_index_df = (
         panel_long_df.groupby("t", as_index=False)
         .agg(
@@ -108,9 +97,10 @@ def build_market_index_df(
             HML=("HML", "first"),
         )
         .set_index("t")
-        .reindex(list(time_columns))
+        .reindex(time_index_values)
         .reset_index()
     )
+    market_index_df["t"] = pd.to_numeric(market_index_df["t"], errors="raise").astype("int64")
     return market_index_df
 
 
@@ -119,6 +109,7 @@ def _save_market_index_png(
     path: Path,
     title: str,
 ) -> None:
+    plt = _get_pyplot()
     temp_path = path.with_name(f"{path.stem}.tmp{path.suffix}")
     figure, (market_axis, factor_axis) = plt.subplots(
         nrows=2,
@@ -126,7 +117,7 @@ def _save_market_index_png(
         figsize=(8, 6.5),
         sharex=True,
     )
-    x_values = market_index_df["t"].map(lambda value: int(str(value).split("_")[-1]))
+    x_values = pd.to_numeric(market_index_df["t"], errors="raise").astype(int)
     market_values = market_index_df["market_index"].to_numpy(dtype=float)
     price_std_values = market_index_df["price_std"].to_numpy(dtype=float)
     price_min_values = market_index_df["price_min"].to_numpy(dtype=float)
@@ -206,6 +197,32 @@ def _save_market_index_png(
         plt.close(figure)
 
 
+def _get_pyplot():
+    global _PYPLOT_MODULE
+    if _PYPLOT_MODULE is None:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        _PYPLOT_MODULE = plt
+    return _PYPLOT_MODULE
+
+
+def _write_parquet_atomically(df: pd.DataFrame, path: Path, index: bool) -> None:
+    temp_path = path.with_name(f"{path.stem}.tmp{path.suffix}")
+    try:
+        df.to_parquet(temp_path, index=index)
+        os.replace(temp_path, path)
+    except PermissionError as exc:
+        if temp_path.exists():
+            temp_path.unlink(missing_ok=True)
+        raise PermissionError(
+            f"Cannot write to {path}. "
+            "If the file is open in another program, close it and retry."
+        ) from exc
+
+
 def save_outputs(
     panel_long_df: pd.DataFrame,
     output_dir: str | Path,
@@ -219,17 +236,14 @@ def save_outputs(
     panel_path = output_path / panel_filename
     market_index_csv_path = output_path / market_index_csv_filename
     market_index_png_path = output_path / market_index_png_filename
-    panel_long_output_df = _format_panel_long_for_csv(panel_long_df)
-    market_index_df = build_market_index_df(
-        panel_long_df=panel_long_df,
-        time_columns=time_columns,
-    )
+    del time_columns
 
-    _write_csv_atomically(panel_long_output_df, panel_path, index=False)
-    _write_csv_atomically(market_index_df, market_index_csv_path, index=False)
-    _save_market_index_png(
-        market_index_df=market_index_df,
-        path=market_index_png_path,
+    panel_long_output_df = prepare_panel_long_for_parquet(panel_long_df)
+    _write_parquet_atomically(panel_long_output_df, panel_path, index=False)
+    rebuild_market_index_artifacts_from_panel_frame(
+        panel_long_df=panel_long_output_df,
+        market_index_csv_path=market_index_csv_path,
+        market_index_png_path=market_index_png_path,
         title=market_index_plot_title,
     )
 
@@ -242,6 +256,41 @@ def save_outputs(
         "metadata": None,
         "excel_workbook": None,
     }
+
+
+def rebuild_market_index_artifacts_from_panel_frame(
+    *,
+    panel_long_df: pd.DataFrame,
+    market_index_csv_path: Path,
+    market_index_png_path: Path,
+    title: str,
+) -> pd.DataFrame:
+    numeric_panel = prepare_panel_long_for_parquet(panel_long_df)
+    market_index_df = build_market_index_df(panel_long_df=numeric_panel)
+    _write_csv_atomically(market_index_df, market_index_csv_path, index=False)
+    _save_market_index_png(
+        market_index_df=market_index_df,
+        path=market_index_png_path,
+        title=title,
+    )
+    return market_index_df
+
+
+def rebuild_market_index_artifacts_from_panel_path(
+    *,
+    panel_path: str | Path,
+    market_index_csv_path: str | Path,
+    market_index_png_path: str | Path,
+    title: str,
+) -> pd.DataFrame:
+    panel_path = Path(panel_path)
+    panel_long_df = pd.read_parquet(panel_path)
+    return rebuild_market_index_artifacts_from_panel_frame(
+        panel_long_df=panel_long_df,
+        market_index_csv_path=Path(market_index_csv_path),
+        market_index_png_path=Path(market_index_png_path),
+        title=title,
+    )
 
 
 def _write_csv_atomically(df: pd.DataFrame, path: Path, index: bool) -> None:
